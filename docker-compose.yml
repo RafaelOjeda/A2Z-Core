@@ -1,0 +1,27 @@
+# Local dev backing services. Brings up LocalStack (DynamoDB, S3, SES, SNS,
+# EventBridge) and Redis so integration tests have something real-ish to hit.
+# Cognito is not emulated — tests use auth.create_test_token instead.
+services:
+  localstack:
+    image: localstack/localstack:3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb,s3,ses,sns,events
+      - DEBUG=0
+      - AWS_DEFAULT_REGION=us-east-1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

@@ -42,6 +42,9 @@ target-version = "py311"
 [tool.ruff.lint]
 # E/F: pyflakes+pycodestyle, I: isort, B: bugbear, UP: pyupgrade, ASYNC: async pitfalls
 select = ["E", "F", "I", "B", "UP", "ASYNC"]
+# Keep the design doc's idioms: `class X(str, Enum)` (UP042) and `timezone.utc`
+# (UP017). Both are explicit in A2Z_Core_Design_TestPlan.md §2.
+ignore = ["UP042", "UP017"]
 
 [tool.mypy]
 python_version = "3.11"

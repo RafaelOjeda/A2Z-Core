@@ -26,6 +26,17 @@ request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 # Keys we never emit even if a caller passes them by mistake.
 _REDACT_KEYS = frozenset({"token", "jwt", "authorization", "password", "secret"})
 
+# LogRecord attributes that ``extra=`` must not overwrite (logging raises if it
+# does). We defensively rename any colliding key to ``<key>_`` instead.
+_RESERVED_LOG_KEYS = frozenset(
+    {
+        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+        "created", "msecs", "relativeCreated", "thread", "threadName",
+        "processName", "process", "message", "asctime", "taskName",
+    }
+)
+
 
 class _JsonFormatter(logging.Formatter):
     """Render a log record as a single compact JSON line."""
@@ -69,7 +80,26 @@ def _configure_root() -> None:
     _configured = True
 
 
-def get_logger(name: str) -> logging.Logger:
-    """Return a namespaced logger emitting compact JSON lines."""
+class _SafeAdapter(logging.LoggerAdapter):  # type: ignore[type-arg]
+    """Renames any ``extra`` key that would collide with a LogRecord attribute."""
+
+    def process(
+        self, msg: Any, kwargs: Any
+    ) -> tuple[Any, Any]:
+        extra = kwargs.get("extra")
+        if extra:
+            kwargs["extra"] = {
+                (f"{k}_" if k in _RESERVED_LOG_KEYS else k): v
+                for k, v in extra.items()
+            }
+        return msg, kwargs
+
+
+def get_logger(name: str) -> _SafeAdapter:
+    """Return a namespaced logger emitting compact JSON lines.
+
+    Wrapped in an adapter that defends against ``extra`` keys colliding with
+    reserved LogRecord attributes (which logging would otherwise reject).
+    """
     _configure_root()
-    return logging.getLogger(f"a2z.{name}")
+    return _SafeAdapter(logging.getLogger(f"a2z.{name}"), {})

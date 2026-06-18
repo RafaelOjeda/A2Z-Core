@@ -289,6 +289,21 @@ async def get_email_status(message_id: str) -> EmailStatus:
     return EmailStatus(from_item(resp["Item"])["status"])
 
 
+async def resolve_org_for_message(message_id: str) -> str | None:
+    """Return the org that sent a given message, or None.
+
+    Used by the SES/SNS notification handler to scope a bounce/complaint back to
+    its org (the SES notification carries the message id we stored).
+    """
+    resp = await clients.run_aws(
+        clients.dynamodb().get_item,
+        TableName=_events_table(),
+        Key=to_item({"message_id": message_id}),
+    )
+    item = resp.get("Item")
+    return from_item(item)["org_id"] if item else None
+
+
 async def get_suppression_list(org_id: str) -> dict[str, list[str]]:
     """Return the org's bounce/complaint lists (Design §2.3). < 100ms."""
     resp = await clients.run_aws(

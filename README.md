@@ -51,4 +51,9 @@ docs/                  # events, retention, cost notes
 
 ## Status
 
-Phase 0 (scaffolding) in progress. Build order: see `CLAUDE.md §13`.
+Phase 1 (Core) complete: all 8 modules (`auth`, `audit`, `membership`,
+`settings`, `rate_limit`, `events`, `storage`, `email`), both Lambdas, the HTTP
+layer, and Terragrunt data-plane infra are implemented and tested — 74 tests
+green, `core/` coverage 93%, `ruff` + `mypy --strict` clean, load-test latencies
+within Design §5.4 targets. See `CLAUDE.md §13` for the build order and §15 for
+the Definition of Done.

@@ -28,6 +28,7 @@ from app.config import settings
 from app.core import clients
 from app.core._ddb import from_item, to_item
 from app.core.audit import ActionType, log_audit
+from app.core.events import publish_event
 from app.core.exceptions import AlreadyExistsError, MembershipError, NotFoundError
 from app.core.logging import get_logger
 
@@ -219,6 +220,8 @@ async def add_member(
 
     await log_audit(org_id, inviter_id, ActionType.MEMBER_ADDED, "user", user_id,
                     {"role": role.value})
+    await publish_event(org_id, "member.added",
+                        {"user_id": user_id, "role": role.value, "inviter_id": inviter_id})
     log.info("member.added", extra={"org_id": org_id, "user_id": user_id})
     return Membership(user_id=user_id, org_id=org_id, role=role, joined_at=now)
 
@@ -254,6 +257,8 @@ async def change_role(
         org_id, changer_id, ActionType.MEMBER_ROLE_CHANGED, "user", user_id,
         {"old_role": old, "new_role": new_role.value},
     )
+    await publish_event(org_id, "member.role_changed",
+                        {"user_id": user_id, "old_role": old, "new_role": new_role.value})
     log.info("member.role_changed", extra={"org_id": org_id, "user_id": user_id})
     joined = from_item(resp.get("Attributes", {})).get("joined_at")
     return Membership(
@@ -285,6 +290,8 @@ async def remove_member(org_id: str, user_id: str, remover_id: str) -> None:
         raise MembershipError(f"Failed to remove member: {exc}") from exc
 
     await log_audit(org_id, remover_id, ActionType.MEMBER_REMOVED, "user", user_id)
+    await publish_event(org_id, "member.removed",
+                        {"user_id": user_id, "remover_id": remover_id})
     log.info("member.removed", extra={"org_id": org_id, "user_id": user_id})
 
 

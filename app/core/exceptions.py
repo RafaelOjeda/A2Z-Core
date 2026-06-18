@@ -93,3 +93,8 @@ class SettingsError(CoreError):
 # --- Audit (500) ---
 class AuditError(CoreError):
     status_code = 500
+
+
+# --- Events (500) ---
+class EventError(CoreError):
+    status_code = 500

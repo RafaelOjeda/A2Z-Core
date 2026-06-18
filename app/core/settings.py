@@ -22,6 +22,7 @@ from app.config import settings as app_settings
 from app.core import clients
 from app.core._ddb import from_item, to_item, to_value
 from app.core.audit import ActionType, log_audit
+from app.core.events import publish_event
 from app.core.exceptions import SettingsError
 from app.core.logging import get_logger
 
@@ -134,6 +135,7 @@ async def set_org_settings(
         org_id, changed_by, ActionType.SETTINGS_CHANGED, "settings", org_id,
         {"changed_fields": sorted(changes)},
     )
+    await publish_event(org_id, "settings.changed", {"changed_fields": sorted(changes)})
     log.info("settings.changed", extra={"org_id": org_id, "fields": sorted(changes)})
     return await get_org_settings(org_id)
 

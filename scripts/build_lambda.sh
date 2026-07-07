@@ -16,7 +16,9 @@ rm -rf "$BUILD_DIR" "$DIST"
 mkdir -p "$BUILD_DIR" dist
 
 # Runtime deps only (no dev extras); target dir keeps the host env untouched.
-python -m pip install --quiet --no-cache-dir --target "$BUILD_DIR" .
+# Must match the Lambda runtime (python3.12); override with PYTHON=... if needed.
+PYTHON="${PYTHON:-python3.12}"
+"$PYTHON" -m pip install --quiet --no-cache-dir --target "$BUILD_DIR" .
 
 # Provided by the Lambda runtime — shipping them just bloats the zip.
 rm -rf "$BUILD_DIR"/boto3 "$BUILD_DIR"/botocore "$BUILD_DIR"/*.dist-info/../boto3* 2>/dev/null || true

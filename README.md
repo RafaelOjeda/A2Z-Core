@@ -31,8 +31,19 @@ python -m scripts.create_local_resources    # tables, bucket, bus, SES config
 pytest tests/unit -v                  # fast, in-process AWS mocks
 pytest tests/integration -v           # moto/LocalStack-backed
 pytest tests/load -m load -v          # latency checks
-ruff check . && mypy app              # lint + types
+ruff check . && ruff format --check . && mypy app scripts   # lint + format + types
 ```
+
+## Build artifacts
+
+```bash
+docker build -t a2z-core .            # monolith image (web; worker = same image + cmd override)
+bash scripts/build_lambda.sh          # dist/lambda.zip for both out-of-band Lambdas
+```
+
+CI (`.github/workflows/ci.yml`) enforces all of the above — lint/format/types,
+tests with a 90% coverage gate on `app/core`, the docker build, and
+`terraform fmt`/`validate` over `infra/`.
 
 ## Layout
 
@@ -91,3 +102,6 @@ Gap-closure progress (verified evidence per phase):
 - **Phase F — Invoicing kickoff**: roadmap in `docs/phase2-invoicing.md`
   (outline only — Invoicing is a service that imports Core, never the
   reverse; no invoicing code lands until Core is frozen).
+- **Phase G — DoD closure**: CLAUDE.md §15 checklist fully ticked with
+  evidence; Core is frozen. Remaining infra deferrals (ACM/HTTPS, Route53,
+  RDS) are listed in `infra/README.md` and arrive with deployment/Phase 2.

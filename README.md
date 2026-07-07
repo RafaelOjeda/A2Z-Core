@@ -57,3 +57,9 @@ layer, and Terragrunt data-plane infra are implemented and tested — 74 tests
 green, `core/` coverage 93%, `ruff` + `mypy --strict` clean, load-test latencies
 within Design §5.4 targets. See `CLAUDE.md §13` for the build order and §15 for
 the Definition of Done.
+
+Gap-closure progress (verified evidence per phase):
+
+- **Phase A — verification pass**: reproduced on 2026-07-07 under Python
+  3.12.3 — 74 tests green (70 unit/integration + 4 load), `app/core` coverage
+  93%, `ruff check` and `mypy --strict` clean.

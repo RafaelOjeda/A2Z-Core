@@ -75,3 +75,7 @@ Gap-closure progress (verified evidence per phase):
   uvicorn and serves `/health`; zip contents inspected. Image build itself is
   verified by the CI docker job (base-image pulls are blocked in the dev
   sandbox's network policy).
+- **Phase D — CI**: `.github/workflows/ci.yml` — lint+format+types, tests
+  with a 90% coverage gate on `app/core` (load tests advisory), docker image
+  build, and terraform fmt/validate over `infra/modules`. Python 3.12, no
+  service containers (suite is in-process moto + fakeredis).

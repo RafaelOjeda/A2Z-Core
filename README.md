@@ -88,3 +88,6 @@ Gap-closure progress (verified evidence per phase):
   compositions with `dependency` wiring and the previously missing `ses` live
   composition. `terraform fmt` clean; `terraform validate` runs in the CI infra
   job (provider downloads are policy-blocked in the dev sandbox).
+- **Phase F — Invoicing kickoff**: roadmap in `docs/phase2-invoicing.md`
+  (outline only — Invoicing is a service that imports Core, never the
+  reverse; no invoicing code lands until Core is frozen).

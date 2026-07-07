@@ -148,12 +148,47 @@ def verify_ses_identity(domain: str = "example.com") -> None:
         log.info("ses.identity.skipped", extra={"domain": domain})
 
 
+def create_sample_config_set(name: str = "local-dev-invoicing") -> None:
+    """Create the sample SES config set CLAUDE.md §12 promises.
+
+    Mirrors what Core builds lazily per {org_id}-{service_type} on first send,
+    including the SNS event destination when SES_NOTIFICATIONS_TOPIC_ARN is set.
+    """
+    ses = clients.ses()
+    try:
+        ses.create_configuration_set(ConfigurationSet={"Name": name})
+        log.info("ses.configset.created", extra={"config_set": name})
+    except ClientError as exc:
+        if _exists(exc, "ConfigurationSetAlreadyExists", "AlreadyExists"):
+            log.info("ses.configset.exists", extra={"config_set": name})
+        else:
+            raise
+    topic_arn = settings().ses_notifications_topic_arn
+    if not topic_arn:
+        return
+    try:
+        ses.create_configuration_set_event_destination(
+            ConfigurationSetName=name,
+            EventDestination={
+                "Name": "a2z-sns-notifications",
+                "Enabled": True,
+                "MatchingEventTypes": ["bounce", "complaint"],
+                "SNSDestination": {"TopicARN": topic_arn},
+            },
+        )
+        log.info("ses.eventdest.created", extra={"config_set": name})
+    except ClientError as exc:
+        if not _exists(exc, "EventDestinationAlreadyExists", "AlreadyExists"):
+            raise
+
+
 def main() -> None:
     create_tables()
     create_bucket()
     create_event_bus()
     create_omnichannel_queues()
     verify_ses_identity()
+    create_sample_config_set()
     log.info("provision.complete", extra={"endpoint": settings().aws_endpoint_url})
 
 

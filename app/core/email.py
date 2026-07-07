@@ -2,8 +2,10 @@
 
 ``send_email`` composes the most of any Core module. In order (CLAUDE.md §8):
 resolve sender from settings -> ensure the org/service SES config set exists
-(lazy, cached) -> check suppression -> rate-limit -> SES send -> record in
-email-events -> audit. Bounces/complaints (delivered out-of-band via SNS) flow
+(lazy, cached; each new set gets a Bounce/Complaint -> SNS event destination
+pointing at ``SES_NOTIFICATIONS_TOPIC_ARN``) -> check suppression -> rate-limit
+-> SES send -> record in email-events -> audit. Bounces/complaints (delivered
+out-of-band via SNS) flow
 through :func:`_handle_bounce_notification` / :func:`_handle_complaint_notification`,
 which suppress the address and publish ``email.bounced`` / ``email.complained``.
 
@@ -31,7 +33,7 @@ from app.core import clients, rate_limit
 from app.core._ddb import from_item, to_item, to_value
 from app.core.audit import ActionType, log_audit
 from app.core.events import publish_event
-from app.core.exceptions import EmailError, SuppressionListError
+from app.core.exceptions import EmailError, InvalidAddressError, SuppressionListError
 from app.core.logging import get_logger
 from app.core.settings import get_org_settings
 
@@ -80,6 +82,17 @@ def _config_set_name(org_id: str, service_type: ServiceType) -> str:
     return f"{org_id}-{service_type.value}"
 
 
+# Deliberately loose: catch obvious garbage (Design §2.3 InvalidAddressError)
+# and let SES be the real authority on deliverability.
+_ADDRESS_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_address(to: str) -> None:
+    """Raise :class:`InvalidAddressError` for addresses SES would never accept."""
+    if not _ADDRESS_RE.match(to or ""):
+        raise InvalidAddressError(f"Invalid email address: {to!r}")
+
+
 async def _ensure_config_set(org_id: str, service_type: ServiceType) -> str:
     """Lazily create the org/service SES config set; cache 'exists' in Redis.
 
@@ -103,8 +116,41 @@ async def _ensure_config_set(org_id: str, service_type: ServiceType) -> str:
         if code not in ("ConfigurationSetAlreadyExists", "AlreadyExists"):
             # Non-fatal for the cache, but surface unexpected failures.
             log.info("ses.configset.error", extra={"config_set": name, "code": code})
+    await _ensure_event_destination(name)
     await redis.set(cache_key, "1", ex=_CONFIG_SET_CACHE_TTL)
     return name
+
+
+async def _ensure_event_destination(config_set: str) -> None:
+    """Attach the Bounce/Complaint -> SNS event destination (CLAUDE.md §8).
+
+    Without this, SES never notifies the ``ses_notifications`` Lambda and
+    addresses are never suppressed. Idempotent: an already-existing destination
+    is a no-op. Skipped (with a log line) when no topic ARN is configured —
+    bare local dev without SNS.
+    """
+    topic_arn = app_settings().ses_notifications_topic_arn
+    if not topic_arn:
+        log.info("ses.eventdest.skipped", extra={"config_set": config_set})
+        return
+    try:
+        await clients.run_aws(
+            clients.ses().create_configuration_set_event_destination,
+            ConfigurationSetName=config_set,
+            EventDestination={
+                "Name": "a2z-sns-notifications",
+                "Enabled": True,
+                "MatchingEventTypes": ["bounce", "complaint"],
+                "SNSDestination": {"TopicARN": topic_arn},
+            },
+        )
+        log.info("ses.eventdest.created", extra={"config_set": config_set})
+    except ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        if code not in ("EventDestinationAlreadyExists", "AlreadyExists"):
+            # Surface loudly: sends would work but bounces would go untracked.
+            log.error("ses.eventdest.error", extra={"config_set": config_set, "code": code})
+            raise EmailError(f"Failed to attach SES event destination: {exc}") from exc
 
 
 async def _is_suppressed(org_id: str, to: str) -> bool:
@@ -139,12 +185,14 @@ async def send_email(
     """Send an email on behalf of an org (Design §2.3).
 
     Raises:
+        InvalidAddressError: ``to`` is not a plausible email address.
         SuppressionListError: ``to`` is on the org's suppression list.
         RateLimitError: Org exceeded its email rate limit (50/hour).
         EmailError: Any SES failure.
 
     Performance: < 500ms (we wait for SES acceptance).
     """
+    _validate_address(to)
     org = await get_org_settings(org_id)
     domain = org.domain or _DEFAULT_DOMAIN
     source = _sender(domain, service_type, org.sender_name)

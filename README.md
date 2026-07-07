@@ -66,3 +66,12 @@ Gap-closure progress (verified evidence per phase):
 - **Phase B — Python 3.12 alignment**: `requires-python >=3.12`, ruff
   `target-version py312`, mypy `python_version 3.12`, `.python-version` added;
   full suite re-verified green under 3.12.
+- **Phase C — Dockerfile + Lambda packaging**: multi-stage `python:3.12-slim`
+  image (non-root, `/health` HEALTHCHECK; worker = same image with an ECS
+  command override), `.dockerignore`, and `scripts/build_lambda.sh` producing
+  `dist/lambda.zip` (both handlers + deps, boto3 excluded — Lambda runtime
+  provides it). Fixed setuptools packaging that silently dropped `app.*`
+  subpackages from non-editable installs. Verified: wheel install boots
+  uvicorn and serves `/health`; zip contents inspected. Image build itself is
+  verified by the CI docker job (base-image pulls are blocked in the dev
+  sandbox's network policy).

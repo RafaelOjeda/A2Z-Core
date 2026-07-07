@@ -31,8 +31,10 @@ dev = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["app"]
+# packages = ["app"] alone would ship only the top-level package and silently
+# drop app.core / app.lambdas / app.routers from wheels and --target installs.
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 100

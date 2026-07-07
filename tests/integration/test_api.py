@@ -87,9 +87,7 @@ def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> 
 
 def test_non_member_forbidden(client: TestClient, make_token: Callable[..., str]) -> None:
     owner = make_token("auth0|owner2", "o2@acme.com")
-    org_id = client.post("/core/orgs", json={"name": "Org2"}, headers=_auth(owner)).json()[
-        "org_id"
-    ]
+    org_id = client.post("/core/orgs", json={"name": "Org2"}, headers=_auth(owner)).json()["org_id"]
     # A different user is not a member -> 404 from require_member.
     stranger = make_token("auth0|stranger", "s@x.com")
     resp = client.get(f"/core/orgs/{org_id}/members", headers=_auth(stranger))

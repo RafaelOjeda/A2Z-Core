@@ -30,10 +30,29 @@ _REDACT_KEYS = frozenset({"token", "jwt", "authorization", "password", "secret"}
 # does). We defensively rename any colliding key to ``<key>_`` instead.
 _RESERVED_LOG_KEYS = frozenset(
     {
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-        "created", "msecs", "relativeCreated", "thread", "threadName",
-        "processName", "process", "message", "asctime", "taskName",
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "message",
+        "asctime",
+        "taskName",
     }
 )
 
@@ -83,14 +102,11 @@ def _configure_root() -> None:
 class _SafeAdapter(logging.LoggerAdapter):  # type: ignore[type-arg]
     """Renames any ``extra`` key that would collide with a LogRecord attribute."""
 
-    def process(
-        self, msg: Any, kwargs: Any
-    ) -> tuple[Any, Any]:
+    def process(self, msg: Any, kwargs: Any) -> tuple[Any, Any]:
         extra = kwargs.get("extra")
         if extra:
             kwargs["extra"] = {
-                (f"{k}_" if k in _RESERVED_LOG_KEYS else k): v
-                for k, v in extra.items()
+                (f"{k}_" if k in _RESERVED_LOG_KEYS else k): v for k, v in extra.items()
             }
         return msg, kwargs
 

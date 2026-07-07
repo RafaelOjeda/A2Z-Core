@@ -174,8 +174,13 @@ async def create_org(org_name: str, owner_id: str) -> Org:
     org = Org(org_id=org_id, name=org_name, owner_id=owner_id, created_at=now)
 
     org_item = to_item(
-        {"PK": _org_pk(org_id), "SK": "METADATA", "name": org_name,
-         "owner_id": owner_id, "created_at": now.isoformat()}
+        {
+            "PK": _org_pk(org_id),
+            "SK": "METADATA",
+            "name": org_name,
+            "owner_id": owner_id,
+            "created_at": now.isoformat(),
+        }
     )
     member_item = to_item(_membership_item(org_id, owner_id, Role.OWNER, now))
     try:
@@ -189,15 +194,12 @@ async def create_org(org_name: str, owner_id: str) -> Org:
     except ClientError as exc:
         raise MembershipError(f"Failed to create org: {exc}") from exc
 
-    await log_audit(org_id, owner_id, ActionType.ORG_CREATED, "org", org_id,
-                    {"name": org_name})
+    await log_audit(org_id, owner_id, ActionType.ORG_CREATED, "org", org_id, {"name": org_name})
     log.info("org.created", extra={"org_id": org_id, "owner_id": owner_id})
     return org
 
 
-async def add_member(
-    org_id: str, user_id: str, role: Role, inviter_id: str
-) -> Membership:
+async def add_member(org_id: str, user_id: str, role: Role, inviter_id: str) -> Membership:
     """Add a user to an org with a role (Design §2.2).
 
     Raises AlreadyExistsError if the user is already in the org. Logs
@@ -213,22 +215,20 @@ async def add_member(
         )
     except ClientError as exc:
         if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise AlreadyExistsError(
-                f"User {user_id} already in org {org_id}"
-            ) from exc
+            raise AlreadyExistsError(f"User {user_id} already in org {org_id}") from exc
         raise MembershipError(f"Failed to add member: {exc}") from exc
 
-    await log_audit(org_id, inviter_id, ActionType.MEMBER_ADDED, "user", user_id,
-                    {"role": role.value})
-    await publish_event(org_id, "member.added",
-                        {"user_id": user_id, "role": role.value, "inviter_id": inviter_id})
+    await log_audit(
+        org_id, inviter_id, ActionType.MEMBER_ADDED, "user", user_id, {"role": role.value}
+    )
+    await publish_event(
+        org_id, "member.added", {"user_id": user_id, "role": role.value, "inviter_id": inviter_id}
+    )
     log.info("member.added", extra={"org_id": org_id, "user_id": user_id})
     return Membership(user_id=user_id, org_id=org_id, role=role, joined_at=now)
 
 
-async def change_role(
-    org_id: str, user_id: str, new_role: Role, changer_id: str
-) -> Membership:
+async def change_role(org_id: str, user_id: str, new_role: Role, changer_id: str) -> Membership:
     """Change a member's role (Design §2.2).
 
     Raises NotFoundError if the membership doesn't exist. Logs
@@ -247,18 +247,23 @@ async def change_role(
         )
     except ClientError as exc:
         if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise NotFoundError(
-                f"No membership for user {user_id} in org {org_id}"
-            ) from exc
+            raise NotFoundError(f"No membership for user {user_id} in org {org_id}") from exc
         raise MembershipError(f"Failed to change role: {exc}") from exc
 
     old = from_item(resp.get("Attributes", {})).get("role")
     await log_audit(
-        org_id, changer_id, ActionType.MEMBER_ROLE_CHANGED, "user", user_id,
+        org_id,
+        changer_id,
+        ActionType.MEMBER_ROLE_CHANGED,
+        "user",
+        user_id,
         {"old_role": old, "new_role": new_role.value},
     )
-    await publish_event(org_id, "member.role_changed",
-                        {"user_id": user_id, "old_role": old, "new_role": new_role.value})
+    await publish_event(
+        org_id,
+        "member.role_changed",
+        {"user_id": user_id, "old_role": old, "new_role": new_role.value},
+    )
     log.info("member.role_changed", extra={"org_id": org_id, "user_id": user_id})
     joined = from_item(resp.get("Attributes", {})).get("joined_at")
     return Membership(
@@ -284,14 +289,11 @@ async def remove_member(org_id: str, user_id: str, remover_id: str) -> None:
         )
     except ClientError as exc:
         if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            raise NotFoundError(
-                f"No membership for user {user_id} in org {org_id}"
-            ) from exc
+            raise NotFoundError(f"No membership for user {user_id} in org {org_id}") from exc
         raise MembershipError(f"Failed to remove member: {exc}") from exc
 
     await log_audit(org_id, remover_id, ActionType.MEMBER_REMOVED, "user", user_id)
-    await publish_event(org_id, "member.removed",
-                        {"user_id": user_id, "remover_id": remover_id})
+    await publish_event(org_id, "member.removed", {"user_id": user_id, "remover_id": remover_id})
     log.info("member.removed", extra={"org_id": org_id, "user_id": user_id})
 
 
@@ -306,8 +308,14 @@ async def create_user_if_not_exists(user_id: str, email: str) -> None:
         await clients.run_aws(
             clients.dynamodb().put_item,
             TableName=_table(),
-            Item=to_item({"PK": _user_pk(user_id), "SK": "METADATA",
-                          "email": email, "created_at": now.isoformat()}),
+            Item=to_item(
+                {
+                    "PK": _user_pk(user_id),
+                    "SK": "METADATA",
+                    "email": email,
+                    "created_at": now.isoformat(),
+                }
+            ),
             ConditionExpression="attribute_not_exists(PK)",
         )
         log.info("user.created", extra={"user_id": user_id})
@@ -317,9 +325,7 @@ async def create_user_if_not_exists(user_id: str, email: str) -> None:
         raise MembershipError(f"Failed to create user: {exc}") from exc
 
 
-def _membership_item(
-    org_id: str, user_id: str, role: Role, now: datetime
-) -> dict[str, object]:
+def _membership_item(org_id: str, user_id: str, role: Role, now: datetime) -> dict[str, object]:
     return {
         "PK": _user_pk(user_id),
         "SK": _org_pk(org_id),

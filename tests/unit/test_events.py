@@ -43,9 +43,7 @@ async def test_custom_source(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_failed_entry_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    eb = _fake_eb(
-        {"FailedEntryCount": 1, "Entries": [{"ErrorCode": "X", "ErrorMessage": "boom"}]}
-    )
+    eb = _fake_eb({"FailedEntryCount": 1, "Entries": [{"ErrorCode": "X", "ErrorMessage": "boom"}]})
     monkeypatch.setattr(clients, "eventbridge", lambda: eb)
     with pytest.raises(EventError):
         await events.publish_event("o", "member.added", {})

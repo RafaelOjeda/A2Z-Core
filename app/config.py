@@ -22,9 +22,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Process-wide configuration, sourced from env vars / `.env`."""
 
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # --- Runtime ---
     env: str = Field(default="local", alias="A2Z_ENV")
@@ -38,13 +36,9 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
     # --- DynamoDB table names ---
-    ddb_membership_table: str = Field(
-        default="a2z-core-membership", alias="DDB_MEMBERSHIP_TABLE"
-    )
+    ddb_membership_table: str = Field(default="a2z-core-membership", alias="DDB_MEMBERSHIP_TABLE")
     ddb_audit_table: str = Field(default="a2z-core-audit", alias="DDB_AUDIT_TABLE")
-    ddb_settings_table: str = Field(
-        default="a2z-core-settings", alias="DDB_SETTINGS_TABLE"
-    )
+    ddb_settings_table: str = Field(default="a2z-core-settings", alias="DDB_SETTINGS_TABLE")
     ddb_email_events_table: str = Field(
         default="a2z-core-email-events", alias="DDB_EMAIL_EVENTS_TABLE"
     )
@@ -75,8 +69,7 @@ class Settings(BaseSettings):
     def cognito_issuer(self) -> str:
         """The `iss` claim Cognito stamps on its tokens."""
         return (
-            f"https://cognito-idp.{self.cognito_region}.amazonaws.com/"
-            f"{self.cognito_user_pool_id}"
+            f"https://cognito-idp.{self.cognito_region}.amazonaws.com/{self.cognito_user_pool_id}"
         )
 
     @property
@@ -101,9 +94,9 @@ def settings() -> Settings:
 # Registry of default rate limits: action -> (limit, window_seconds).
 # Services read these instead of hardcoding literals (CLAUDE.md §7).
 RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "email.send": (50, 3600),          # 50 / hour / org
-    "ai.parse.user": (30, 60),         # 30 / min / user (future: Invoicing)
-    "ai.parse.org": (500, 86400),      # 500 / day / org (future: Invoicing)
+    "email.send": (50, 3600),  # 50 / hour / org
+    "ai.parse.user": (30, 60),  # 30 / min / user (future: Invoicing)
+    "ai.parse.org": (500, 86400),  # 500 / day / org (future: Invoicing)
 }
 
 # Cost note (CLAUDE.md §10): revisit DynamoDB provisioned capacity only if

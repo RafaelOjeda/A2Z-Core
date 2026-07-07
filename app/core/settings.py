@@ -91,9 +91,7 @@ async def get_org_settings(org_id: str) -> OrgSettings:
     return result
 
 
-async def set_org_settings(
-    org_id: str, changes: dict[str, Any], changed_by: str
-) -> OrgSettings:
+async def set_org_settings(org_id: str, changes: dict[str, Any], changed_by: str) -> OrgSettings:
     """Partially update org settings (Design §2.6).
 
     Validates field names, writes DynamoDB, invalidates the cache, and logs
@@ -132,7 +130,11 @@ async def set_org_settings(
 
     await clients.redis_client().delete(_cache_key(org_id))
     await log_audit(
-        org_id, changed_by, ActionType.SETTINGS_CHANGED, "settings", org_id,
+        org_id,
+        changed_by,
+        ActionType.SETTINGS_CHANGED,
+        "settings",
+        org_id,
         {"changed_fields": sorted(changes)},
     )
     await publish_event(org_id, "settings.changed", {"changed_fields": sorted(changes)})

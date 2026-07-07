@@ -110,4 +110,3 @@ def test_fetch_jwks_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     second = auth._fetch_jwks()
     assert "k1" in first and first == second
     assert calls["n"] == 1  # second call served from cache
-

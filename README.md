@@ -79,3 +79,12 @@ Gap-closure progress (verified evidence per phase):
   with a 90% coverage gate on `app/core` (load tests advisory), docker image
   build, and terraform fmt/validate over `infra/modules`. Python 3.12, no
   service containers (suite is in-process moto + fakeredis).
+- **Phase E — control-plane Terragrunt**: vpc (2-AZ, single NAT, free DDB/S3
+  gateway endpoints, alb→app→redis SG chain), iam (least-privilege task +
+  execution + two Lambda roles matching `app/config.py` resource names), redis
+  (ElastiCache t4g.micro), cognito (user pool + SPA client + both Lambdas from
+  `dist/lambda.zip`, post-confirm trigger + SNS wiring), ecs (ECR, Fargate task
+  + ALB with `/health` matcher 200, CPU autoscaling 1→3) — plus live/prod
+  compositions with `dependency` wiring and the previously missing `ses` live
+  composition. `terraform fmt` clean; `terraform validate` runs in the CI infra
+  job (provider downloads are policy-blocked in the dev sandbox).

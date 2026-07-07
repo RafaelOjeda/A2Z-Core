@@ -72,20 +72,24 @@ async def test_rate_limit_enforced(aws: None) -> None:
             org_id, ServiceType.INVOICING, f"r{i}@example.com", "Hi", "<p>hi</p>"
         )
     with pytest.raises(RateLimitError):
-        await email.send_email(
-            org_id, ServiceType.INVOICING, "over@example.com", "Hi", "<p>hi</p>"
-        )
+        await email.send_email(org_id, ServiceType.INVOICING, "over@example.com", "Hi", "<p>hi</p>")
 
 
 async def test_send_with_attachment(aws: None) -> None:
     org_id = "org-attach"
     r = await email.send_email(
-        org_id, ServiceType.INVOICING, "client@example.com", "Invoice", "<p>see attached</p>",
-        attachments=[{
-            "filename": "invoice.pdf",
-            "content": b"%PDF-1.4 fake",
-            "mime_type": "application/pdf",
-        }],
+        org_id,
+        ServiceType.INVOICING,
+        "client@example.com",
+        "Invoice",
+        "<p>see attached</p>",
+        attachments=[
+            {
+                "filename": "invoice.pdf",
+                "content": b"%PDF-1.4 fake",
+                "mime_type": "application/pdf",
+            }
+        ],
     )
     assert r.status == EmailStatus.SENT
 

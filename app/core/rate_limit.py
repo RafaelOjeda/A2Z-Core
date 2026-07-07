@@ -76,9 +76,7 @@ async def check_and_increment(
         )
 
 
-async def _retry_after(
-    redis: Any, key: str, now: float, window_seconds: int
-) -> int:
+async def _retry_after(redis: Any, key: str, now: float, window_seconds: int) -> int:
     """Seconds until the oldest in-window request ages out (>= 1)."""
     oldest = await redis.zrange(key, 0, 0, withscores=True)
     if not oldest:

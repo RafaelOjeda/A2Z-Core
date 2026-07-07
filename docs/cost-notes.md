@@ -36,9 +36,23 @@ active debugging only — never the default in dev or prod.
 | S3 (logos + transient media) | standard + lifecycle | ~$1–5 |
 | EventBridge | $1 / million events | ~$1 |
 | CloudWatch | free tier + overage | ~$0–5 |
+| NAT gateway (single, one AZ) | hourly + per-GB | ~$32 + data |
+| ALB | hourly + LCU | ~$16–20 |
+| Lambda (post-confirm, ses-notifications) | per-invoke | ~$0 at MVP volume |
+
+## Networking cost posture (infra/modules/vpc)
+
+- **One NAT gateway**, single AZ — the ~$32/mo floor. No per-AZ NAT until an
+  availability incident actually justifies it (§14: no multi-AZ gold-plating).
+- **Free gateway VPC endpoints for DynamoDB and S3** carry the bulk of Core's
+  traffic, so NAT per-GB charges apply mostly to SES/EventBridge/ECR calls.
+- **Paid interface endpoints skipped** (~$7/mo each) — not worth it at MVP
+  volume; revisit if NAT data processing shows up in Cost Explorer.
 
 ## Other cost guards
 
 - **Single region** (us-east-1) — no cross-region replication for MVP.
 - **boto3 client singletons** — clients built once; avoids per-call setup cost.
 - **S3 lifecycle**: active 30d → archive → expire 90d (or per-file TTL).
+- **ECS**: 0.25 vCPU / 512MB Fargate, desired 1, autoscale max 3; Container
+  Insights off; log retention 30d.

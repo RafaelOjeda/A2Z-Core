@@ -111,9 +111,7 @@ async def log_audit(
         "ttl": int((now + _AUDIT_RETENTION).timestamp()),
     }
     try:
-        await clients.run_aws(
-            clients.dynamodb().put_item, TableName=_table(), Item=to_item(item)
-        )
+        await clients.run_aws(clients.dynamodb().put_item, TableName=_table(), Item=to_item(item))
     except Exception as exc:  # noqa: BLE001 — re-raised as typed CoreError
         raise AuditError(f"Failed to write audit event: {exc}") from exc
 

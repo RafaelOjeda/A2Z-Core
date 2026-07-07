@@ -17,7 +17,12 @@ async def test_upload_download_list_and_audit(aws: None) -> None:
     """Design §4.3: upload -> signed URL -> download -> list -> audit."""
     org_id, user = "test-org-789", "auth0|user789"
     result = await storage.upload_file(
-        org_id, "invoicing", "invoice-1054.pdf", PDF, "application/pdf", user,
+        org_id,
+        "invoicing",
+        "invoice-1054.pdf",
+        PDF,
+        "application/pdf",
+        user,
         ttl_days=30,
     )
     assert result.key.startswith(f"{org_id}/invoicing/")

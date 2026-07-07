@@ -72,8 +72,11 @@ async def test_send_email_latency(aws: None) -> None:
     for i in range(40):
         start = time.perf_counter()
         await email.send_email(
-            "load-email-org", ServiceType.INVOICING, f"c{i}@example.com",
-            "Subject", "<p>body</p>",
+            "load-email-org",
+            ServiceType.INVOICING,
+            f"c{i}@example.com",
+            "Subject",
+            "<p>body</p>",
         )
         latencies.append(time.perf_counter() - start)
 

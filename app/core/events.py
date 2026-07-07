@@ -56,17 +56,14 @@ async def publish_event(
         "EventBusName": settings().event_bus_name,
     }
     try:
-        resp = await clients.run_aws(
-            clients.eventbridge().put_events, Entries=[entry]
-        )
+        resp = await clients.run_aws(clients.eventbridge().put_events, Entries=[entry])
     except ClientError as exc:
         raise EventError(f"Failed to publish {event_type}: {exc}") from exc
 
     if resp.get("FailedEntryCount", 0) > 0:
         err = resp["Entries"][0]
         raise EventError(
-            f"EventBridge rejected {event_type}: "
-            f"{err.get('ErrorCode')} {err.get('ErrorMessage')}"
+            f"EventBridge rejected {event_type}: {err.get('ErrorCode')} {err.get('ErrorMessage')}"
         )
 
     event_id = resp["Entries"][0].get("EventId", "")

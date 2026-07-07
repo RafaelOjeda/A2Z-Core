@@ -156,9 +156,7 @@ async def send_email(
         raise SuppressionListError(f"{to} is suppressed for org {org_id}")
 
     limit, window = rate_limit.limits_for("email.send")
-    await rate_limit.check_and_increment(
-        org_id, "email.send", limit=limit, window_seconds=window
-    )
+    await rate_limit.check_and_increment(org_id, "email.send", limit=limit, window_seconds=window)
 
     # Local/dev: ensure the sending domain is a verified SES identity so sends
     # succeed against moto/LocalStack. In prod the domain is verified once at
@@ -181,13 +179,19 @@ async def send_email(
     now = datetime.now(timezone.utc)
     await _record_event(org_id, message_id, to, service_type, subject, metadata, now)
     await log_audit(
-        org_id, "system", ActionType.EMAIL_SENT, "email", message_id,
+        org_id,
+        "system",
+        ActionType.EMAIL_SENT,
+        "email",
+        message_id,
         {"to": to, "subject": subject, "service_type": service_type.value},
     )
     log.info("email.sent", extra={"org_id": org_id, "service_type": service_type.value})
 
     return EmailResult(
-        message_id=message_id, status=EmailStatus.SENT, timestamp=now,
+        message_id=message_id,
+        status=EmailStatus.SENT,
+        timestamp=now,
         external_message_id=message_id,
     )
 
@@ -333,9 +337,7 @@ async def unsuppress_email(org_id: str, email: str) -> None:
     log.info("email.unsuppressed", extra={"org_id": org_id})
 
 
-async def _suppress(
-    org_id: str, email: str, reason: str, bounce_type: str | None = None
-) -> None:
+async def _suppress(org_id: str, email: str, reason: str, bounce_type: str | None = None) -> None:
     now = datetime.now(timezone.utc)
     item: dict[str, Any] = {
         "org_id": org_id,
@@ -375,26 +377,25 @@ async def _handle_bounce_notification(
     await _suppress(org_id, to, "bounce", bounce_type)
     await _set_event_status(message_id, EmailStatus.BOUNCED)
     await log_audit(
-        org_id, "system", ActionType.EMAIL_BOUNCED, "email", message_id,
+        org_id,
+        "system",
+        ActionType.EMAIL_BOUNCED,
+        "email",
+        message_id,
         {"to": to, "bounce_type": bounce_type},
     )
     await publish_event(
-        org_id, "email.bounced",
+        org_id,
+        "email.bounced",
         {"email": to, "bounce_type": bounce_type, "message_id": message_id},
     )
     log.info("email.bounced", extra={"org_id": org_id, "bounce_type": bounce_type})
 
 
-async def _handle_complaint_notification(
-    org_id: str, message_id: str, to: str
-) -> None:
+async def _handle_complaint_notification(org_id: str, message_id: str, to: str) -> None:
     """Process an SES complaint: suppress + mark + publish. Idempotent."""
     await _suppress(org_id, to, "complaint")
     await _set_event_status(message_id, EmailStatus.COMPLAINED)
-    await log_audit(
-        org_id, "system", ActionType.EMAIL_COMPLAINED, "email", message_id, {"to": to}
-    )
-    await publish_event(
-        org_id, "email.complained", {"email": to, "message_id": message_id}
-    )
+    await log_audit(org_id, "system", ActionType.EMAIL_COMPLAINED, "email", message_id, {"to": to})
+    await publish_event(org_id, "email.complained", {"email": to, "message_id": message_id})
     log.info("email.complained", extra={"org_id": org_id})

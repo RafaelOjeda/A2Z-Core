@@ -75,9 +75,7 @@ async def upload_file(
     Performance: < 1s (size-dependent).
     """
     if len(content) > MAX_FILE_BYTES:
-        raise FileTooLargeError(
-            f"File is {len(content)} bytes; max is {MAX_FILE_BYTES}"
-        )
+        raise FileTooLargeError(f"File is {len(content)} bytes; max is {MAX_FILE_BYTES}")
 
     now = datetime.now(timezone.utc)
     ts = now.strftime("%Y%m%d-%H%M%S-%f")
@@ -110,20 +108,28 @@ async def upload_file(
         # by an S3 lifecycle rule (CLAUDE.md §11 / docs/retention.md).
         meta["ttl"] = int((now + timedelta(days=ttl_days)).timestamp())
 
-    await clients.run_aws(
-        clients.dynamodb().put_item, TableName=_table(), Item=to_item(meta)
-    )
+    await clients.run_aws(clients.dynamodb().put_item, TableName=_table(), Item=to_item(meta))
     await log_audit(
-        org_id, uploaded_by, ActionType.FILE_UPLOADED, "file", key,
+        org_id,
+        uploaded_by,
+        ActionType.FILE_UPLOADED,
+        "file",
+        key,
         {"filename": filename, "size_bytes": len(content), "mime_type": mime_type},
     )
     log.info("file.uploaded", extra={"org_id": org_id, "size_bytes": len(content)})
 
     signed = generate_signed_url(key)
     return StoredFile(
-        key=key, filename=filename, url=signed, signed_url=signed,
-        size_bytes=len(content), mime_type=mime_type, uploaded_at=now,
-        uploaded_by=uploaded_by, service_type=service_type,
+        key=key,
+        filename=filename,
+        url=signed,
+        signed_url=signed,
+        size_bytes=len(content),
+        mime_type=mime_type,
+        uploaded_at=now,
+        uploaded_by=uploaded_by,
+        service_type=service_type,
     )
 
 
@@ -141,9 +147,7 @@ async def download_file(org_id: str, key: str) -> bytes:
     """
     _assert_org_scope(org_id, key)
     try:
-        resp = await clients.run_aws(
-            clients.s3().get_object, Bucket=_bucket(), Key=key
-        )
+        resp = await clients.run_aws(clients.s3().get_object, Bucket=_bucket(), Key=key)
         return bytes(resp["Body"].read())
     except ClientError as exc:
         if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
@@ -197,9 +201,7 @@ async def list_files(
             "TableName": _table(),
             "IndexName": "service-index",
             "KeyConditionExpression": "org_id = :o AND service_type = :s",
-            "ExpressionAttributeValues": {
-                ":o": to_value(org_id), ":s": to_value(service_type)
-            },
+            "ExpressionAttributeValues": {":o": to_value(org_id), ":s": to_value(service_type)},
         }
     else:
         query = {

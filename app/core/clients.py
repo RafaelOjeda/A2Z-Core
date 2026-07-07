@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import boto3
 import redis.asyncio as aioredis
@@ -33,8 +33,6 @@ if TYPE_CHECKING:  # import only for type checkers; avoids runtime cost
     from mypy_boto3_s3 import S3Client
     from mypy_boto3_ses import SESClient
     from mypy_boto3_sns import SNSClient
-
-T = TypeVar("T")
 
 # Modest, bounded retries keep tail latency predictable instead of hanging.
 _BOTO_CONFIG = BotoConfig(
@@ -87,7 +85,7 @@ def redis_client() -> aioredis.Redis[str]:
     return aioredis.from_url(settings().redis_url, decode_responses=True)
 
 
-async def run_aws(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_aws[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Run a sync boto3 call in a worker thread so it doesn't block the loop."""
     return await asyncio.to_thread(fn, *args, **kwargs)
 

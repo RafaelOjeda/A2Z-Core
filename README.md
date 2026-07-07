@@ -63,3 +63,6 @@ Gap-closure progress (verified evidence per phase):
 - **Phase A — verification pass**: reproduced on 2026-07-07 under Python
   3.12.3 — 74 tests green (70 unit/integration + 4 load), `app/core` coverage
   93%, `ruff check` and `mypy --strict` clean.
+- **Phase B — Python 3.12 alignment**: `requires-python >=3.12`, ruff
+  `target-version py312`, mypy `python_version 3.12`, `.python-version` added;
+  full suite re-verified green under 3.12.

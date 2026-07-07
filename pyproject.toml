@@ -2,9 +2,7 @@
 name = "a2z-core"
 version = "0.1.0"
 description = "A2Z Core — shared infrastructure layer (auth, membership, email, storage, audit, settings, events, rate limiting) for all A2Z services."
-requires-python = ">=3.11"
-# NOTE: Production target is Python 3.12 (per design doc). We allow 3.11+ so the
-# suite runs in CI/dev environments that ship 3.11. Avoid 3.12-only syntax.
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
@@ -38,7 +36,7 @@ packages = ["app"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 # E/F: pyflakes+pycodestyle, I: isort, B: bugbear, UP: pyupgrade, ASYNC: async pitfalls
@@ -48,7 +46,7 @@ select = ["E", "F", "I", "B", "UP", "ASYNC"]
 ignore = ["UP042", "UP017"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 # boto3 is dynamically typed; we lean on boto3-stubs but allow untyped where needed.

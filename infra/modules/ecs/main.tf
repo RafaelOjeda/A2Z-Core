@@ -59,6 +59,11 @@ variable "cognito_app_client_id" {
   type = string
 }
 
+variable "ses_notifications_topic_arn" {
+  type        = string
+  description = "SNS topic Core attaches to each lazily-created SES config set (ses module)."
+}
+
 data "aws_region" "current" {}
 
 resource "aws_ecr_repository" "app" {
@@ -102,6 +107,7 @@ resource "aws_ecs_task_definition" "app" {
         { name = "COGNITO_USER_POOL_ID", value = var.cognito_user_pool_id },
         { name = "COGNITO_APP_CLIENT_ID", value = var.cognito_app_client_id },
         { name = "COGNITO_REGION", value = data.aws_region.current.name },
+        { name = "SES_NOTIFICATIONS_TOPIC_ARN", value = var.ses_notifications_topic_arn },
       ]
       logConfiguration = {
         logDriver = "awslogs"

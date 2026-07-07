@@ -114,3 +114,48 @@ async def test_unknown_message_status_raises(aws: None) -> None:
 
     with pytest.raises(EmailError):
         await email.get_email_status("does-not-exist")
+
+
+@pytest.mark.parametrize("bad", ["", "no-at-sign", "a@b", "two@@example.com", "spa ce@example.com"])
+async def test_invalid_address_rejected(aws: None, bad: str) -> None:
+    """Design §2.3: send_email raises InvalidAddressError before touching SES."""
+    from app.core.exceptions import InvalidAddressError
+
+    with pytest.raises(InvalidAddressError):
+        await email.send_email("org-x", ServiceType.INVOICING, bad, "Hi", "<p>hi</p>")
+
+
+async def test_config_set_gets_sns_event_destination(
+    aws: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLAUDE.md §8: each lazily-created config set gets a Bounce/Complaint ->
+    SNS event destination, so bounces actually reach the ses_notifications
+    Lambda in AWS. Idempotent on the second send (Redis cache path)."""
+    from app import config
+    from app.core import clients
+
+    topic_arn = clients.sns().create_topic(Name="a2z-ses-notifications")["TopicArn"]
+    monkeypatch.setenv("SES_NOTIFICATIONS_TOPIC_ARN", topic_arn)
+    config.settings.cache_clear()
+    try:
+        org_id = "dest-org"
+        await email.send_email(org_id, ServiceType.INVOICING, "a@example.com", "Hi", "<p>hi</p>")
+
+        described = clients.ses().describe_configuration_set(
+            ConfigurationSetName=f"{org_id}-invoicing",
+            ConfigurationSetAttributeNames=["eventDestinations"],
+        )
+        destinations = described["EventDestinations"]
+        assert len(destinations) == 1
+        dest = destinations[0]
+        assert dest["Enabled"] is True
+        assert set(dest["MatchingEventTypes"]) == {"bounce", "complaint"}
+        assert dest["SNSDestination"]["TopicARN"] == topic_arn
+
+        # Second send: config set + destination already exist — must not error.
+        r2 = await email.send_email(
+            org_id, ServiceType.INVOICING, "b@example.com", "Hi", "<p>hi</p>"
+        )
+        assert r2.status == EmailStatus.SENT
+    finally:
+        config.settings.cache_clear()

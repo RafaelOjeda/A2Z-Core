@@ -105,3 +105,13 @@ Gap-closure progress (verified evidence per phase):
 - **Phase G — DoD closure**: CLAUDE.md §15 checklist fully ticked with
   evidence; Core is frozen. Remaining infra deferrals (ACM/HTTPS, Route53,
   RDS) are listed in `infra/README.md` and arrive with deployment/Phase 2.
+- **Spec-audit gap closure (G1–G5)**: lazily-created SES config sets now get
+  the Bounce/Complaint → SNS event destination CLAUDE.md §8 requires (topic
+  ARN via `SES_NOTIFICATIONS_TOPIC_ARN`, wired through the ECS task env), so
+  the suppression pipeline works end-to-end in AWS; `send_email` raises the
+  spec'd `InvalidAddressError` on malformed recipients; the
+  `RateLimitError`-outside-`EmailError` deviation from Design §6 is now
+  documented on the class (deliberate — the limiter is generic); all six
+  Design §5.4 latency targets have load tests (was three); and
+  `create_local_resources.py` creates the sample config set its docstring
+  promised.

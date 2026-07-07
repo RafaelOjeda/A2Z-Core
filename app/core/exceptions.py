@@ -61,6 +61,13 @@ class RateLimitError(CoreError):
     """A rate limit was exceeded.
 
     Carries ``retry_after`` (seconds) so callers/HTTP layer can set Retry-After.
+
+    DOCUMENTED DEVIATION from Design §6, which declares
+    ``RateLimitError(EmailError)``: the limiter is a general Core facility
+    (``email.send`` today, ``ai.parse`` and future actions tomorrow — CLAUDE.md
+    §7), so parenting it under EmailError would be wrong for non-email actions.
+    Callers that want "anything email-ish" must catch ``(EmailError,
+    RateLimitError)``. Do not "fix" this back to the spec hierarchy.
     """
 
     status_code = 429

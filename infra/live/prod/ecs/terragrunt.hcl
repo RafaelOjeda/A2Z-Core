@@ -48,6 +48,15 @@ dependency "cognito" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan"]
 }
 
+dependency "ses" {
+  config_path = "../ses"
+
+  mock_outputs = {
+    notifications_topic_arn = "arn:aws:sns:us-east-1:000000000000:a2z-ses-notifications"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan"]
+}
+
 inputs = {
   name_prefix = "a2z-core"
   # Push the image before applying:
@@ -67,4 +76,6 @@ inputs = {
 
   cognito_user_pool_id  = dependency.cognito.outputs.user_pool_id
   cognito_app_client_id = dependency.cognito.outputs.app_client_id
+
+  ses_notifications_topic_arn = dependency.ses.outputs.notifications_topic_arn
 }

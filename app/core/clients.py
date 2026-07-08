@@ -22,6 +22,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
 import boto3
+import httpx
 import redis.asyncio as aioredis
 from botocore.config import Config as BotoConfig
 
@@ -107,6 +108,18 @@ def sqs() -> SQSClient:
 def redis_client() -> aioredis.Redis[str]:
     """Shared async Redis client (decodes responses to str)."""
     return aioredis.from_url(settings().redis_url, decode_responses=True)
+
+
+@lru_cache(maxsize=1)
+def boto3_session() -> boto3.Session:
+    """Shared boto3 Session, used by core.realtime to get SigV4 credentials."""
+    return boto3.Session(region_name=settings().aws_region)
+
+
+@lru_cache(maxsize=1)
+def appsync_http_client() -> httpx.AsyncClient:
+    """Shared async HTTP client for AppSync GraphQL calls (core.realtime)."""
+    return httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
 
 
 async def run_aws[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:

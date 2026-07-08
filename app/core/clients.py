@@ -122,6 +122,13 @@ def appsync_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
 
 
+@lru_cache(maxsize=1)
+def http_client() -> httpx.AsyncClient:
+    """Shared async HTTP client for outbound calls to third-party channel
+    providers (WhatsApp Graph API, etc. — Omni-Channel's adapters)."""
+    return httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0))
+
+
 async def run_aws[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Run a sync boto3 call in a worker thread so it doesn't block the loop."""
     return await asyncio.to_thread(fn, *args, **kwargs)

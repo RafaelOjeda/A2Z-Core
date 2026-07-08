@@ -27,6 +27,7 @@ from app.aws_resources import (
 from app.config import SQS_MAX_RECEIVE_COUNT, settings
 from app.core import clients
 from app.core.logging import get_logger
+from app.services.omnichannel.aws_resources import create_queues as create_omnichannel_queues
 
 log = get_logger("scripts.provision")
 

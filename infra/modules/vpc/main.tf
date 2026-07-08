@@ -198,6 +198,29 @@ resource "aws_security_group" "redis" {
   }
 }
 
+resource "aws_security_group" "rds" {
+  name_prefix = "${var.name_prefix}-rds-"
+  vpc_id      = aws_vpc.main.id
+  description = "Shared Postgres RDS instance, reachable only from app tasks"
+
+  ingress {
+    description     = "postgres from app"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 output "vpc_id" {
   value = aws_vpc.main.id
 }
@@ -220,4 +243,8 @@ output "app_sg_id" {
 
 output "redis_sg_id" {
   value = aws_security_group.redis.id
+}
+
+output "rds_sg_id" {
+  value = aws_security_group.rds.id
 }

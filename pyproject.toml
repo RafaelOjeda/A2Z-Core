@@ -68,6 +68,7 @@ testpaths = ["tests"]
 markers = [
     "load: load/latency tests (deselect with '-m \"not load\"')",
     "integration: tests that hit LocalStack/moto",
+    "postgres: tests that require a real Postgres (DATABASE_URL); deselect with '-m \"not postgres\"' if none is available locally",
 ]
 addopts = "-ra"
 

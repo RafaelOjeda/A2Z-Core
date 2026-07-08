@@ -71,6 +71,12 @@ class Settings(BaseSettings):
         default="a2z-omnichannel-outbound-dlq", alias="OMNICHANNEL_OUTBOUND_DLQ"
     )
 
+    # --- Postgres (shared RDS instance; each service uses its own schema) ---
+    database_url: str = Field(
+        default="postgresql+asyncpg://a2z:a2z@localhost:5432/a2z_core",
+        alias="DATABASE_URL",
+    )
+
     # --- Cognito ---
     cognito_user_pool_id: str = Field(default="", alias="COGNITO_USER_POOL_ID")
     cognito_region: str = Field(default="us-east-1", alias="COGNITO_REGION")

@@ -33,17 +33,20 @@ os.environ.setdefault("TEST_JWT_SECRET", "test-secret-key-for-suite")
 
 @pytest.fixture
 def aws() -> Iterator[None]:
-    """Provision all Core AWS resources inside a moto mock for one test."""
+    """Provision all Core (+ Omni-Channel) AWS resources inside a moto mock."""
     from moto import mock_aws
 
     from app.core import clients
+    from app.services.omnichannel import queues as omnichannel_queues
     from scripts.create_local_resources import main as provision
 
     with mock_aws():
         clients.reset_clients()
+        omnichannel_queues.reset_cache()
         provision()
         yield
     clients.reset_clients()
+    omnichannel_queues.reset_cache()
 
 
 @pytest.fixture(autouse=True)

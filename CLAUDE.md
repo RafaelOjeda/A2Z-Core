@@ -370,6 +370,13 @@ Order chosen by dependency depth:
 When all boxes are checked, Core is frozen and Invoicing (Phase 2) can begin.
 **Status: all boxes checked — Core is frozen. Phase 2 kickoff roadmap: `docs/phase2-invoicing.md`.**
 
+**Deliberate unfreeze (Phase 3 prerequisite, 2026-07-08):** `secrets.py` and
+`realtime.py` were added per `app/services/omnichannel/CLAUDE.md` §6.2 — the
+two Core modules Omni-Channel needs that don't belong to any one service.
+Added to the module table in §3, full suite re-run green (83 tests, 94% core
+coverage, `ruff` + `mypy --strict` clean), Core re-frozen. No other module was
+touched.
+
 ---
 
 ## 16. Pointers

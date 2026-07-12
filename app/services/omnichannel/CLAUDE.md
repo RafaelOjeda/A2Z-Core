@@ -14,6 +14,24 @@
 > anything this service needs from Core is a **deliberate Core change** —
 > re-run the entire Core suite (74 tests, >90% coverage bar, `ruff` +
 > `mypy --strict`) before continuing (root CLAUDE.md §13, Phase 2 rule).
+>
+> **Deployment revision (2026-07-12):** MVP runs on a **single EC2 instance**
+> (§12) — API + worker processes plus Postgres and Redis containers on one
+> box. The distributed shape (Fargate, RDS, ElastiCache, ALB, NAT, AppSync)
+> is a deliberate *later* phase; the seams that make that split cheap (SQS,
+> the `core.realtime` facade, Secrets Manager) are kept from day one. Where
+> older text below assumed Fargate/Lambda/AppSync, §12 supersedes it.
+>
+> **Scope revision (2026-07-12):** v1 is the *minimal* working product —
+> AI/Bedrock features are **cut**, and auto-routing/presence, templates,
+> commission, and dashboards are **deferred** (§15). v1 = a multi-tenant
+> unified inbox: companies connect their channels, messages arrive, agents
+> claim and reply. §1.1 states the tenancy model explicitly.
+>
+> **Channel scope revision (2026-07-12):** **SMS is cut from v1.** v1
+> channels are WhatsApp and email only. The `ChannelAdapter` contract (§5.2,
+> §7) means adding SMS later is one new adapter file + a registry entry —
+> no other code or infra changes.
 
 ---
 
@@ -22,8 +40,8 @@
 ## 1. The Product in One Paragraph
 
 Small businesses talk to their customers everywhere at once: a WhatsApp
-message about an order, an SMS asking for a quote, an email with a photo
-attached. Today those live in three different apps on someone's phone.
+message about an order, an email with a photo attached, later an SMS asking
+for a quote. Today those live in different apps on someone's phone.
 **Omni-Channel is a unified inbox**: every customer message, from every
 channel, lands in one conversation view per org. Team members ("agents")
 claim or get assigned conversations, reply from the same screen — the reply
@@ -32,11 +50,39 @@ conversation leads to a paid invoice (via the Invoicing service), the agent
 who handled it is credited commission. It is the second service on the A2Z
 platform, and the second proof that Core generalizes.
 
+## 1.1 Multi-Tenancy — companies, users, isolation (explicit)
+
+This service is multi-tenant by construction: a **company = an org**, Core's
+tenancy unit. Nothing here is single-company. Concretely:
+
+- **Many companies, one deployment.** Tenancy is row-level, not per-tenant
+  infrastructure: the one EC2/Postgres/Redis (§12) serves every org; every
+  table carries `org_id` (§5.1) and every query filters on it (root golden
+  rule #2).
+- **Each company connects its own channels.** `channel_connections` rows are
+  org-scoped, and credentials live per org in Secrets Manager
+  (`a2z/{org_id}/omnichannel/...`, §6.2). Two companies can connect the same
+  channel type — even the same provider — without ever seeing each other's
+  traffic.
+- **Inbound messages resolve to the right company via the connection that
+  received them:** every channel connection registers its own webhook URL
+  (`POST /webhooks/{channel_type}/{connection_id}`, §5.6), so the
+  `connection_id` yields the org and its signing secret before anything else
+  runs; inbound email resolves the org from the recipient address. A
+  conversation belongs to exactly one org — there is no cross-org inbox.
+- **Users belong to companies via `core.membership`** (already built and
+  tested in Core): roles are per-org (§4), one user may belong to several
+  orgs, and agents only ever see conversations for orgs they are members of
+  — membership is re-checked on every API call and on realtime connects
+  (§5.4).
+- **Isolation is tested, not assumed:** the DoD (§16) requires a cross-org
+  isolation test per table, the same bar Core met.
+
 ## 2. Core Concepts (the domain vocabulary)
 
 | Concept | Meaning |
 |---|---|
-| **Channel** | A communication medium: WhatsApp, SMS, or email at launch (Instagram/Messenger v1.1, voice v1.5). Each org connects its own channel accounts (its WhatsApp Business number, its SMS number, its email domain). |
+| **Channel** | A communication medium: WhatsApp or email at launch (SMS deferred — see channel scope revision above; Instagram/Messenger v1.1, voice v1.5). Each org connects its own channel accounts (its WhatsApp Business number, its email domain). |
 | **Channel connection** | An org's live link to one channel: credentials, the org's number/address on that channel, and connection status. One org can have several (e.g. two WhatsApp numbers). |
 | **Channel identity** | A *customer's* handle on a channel — a phone number, an email address. Identities can be linked to one customer across channels (the same person's phone + email). |
 | **Conversation** | The org-scoped thread with one customer. Messages from any of that customer's linked identities collapse into one conversation. Has a status (`open`, `pending`, `closed`) and at most one current assignee. |
@@ -61,7 +107,7 @@ seconds. The assigned agent gets a notification.
 **Reply — agent responds:**
 The agent types a reply in the unified inbox (or picks a template). The API
 enqueues an outbound job; the worker sends it through the right channel
-adapter (WhatsApp Graph API / SMS provider / `core.email`), records the
+adapter (WhatsApp Graph API / `core.email`), records the
 message with its provider ID, and later processes the delivery webhook
 (sent → delivered → read) to update message status live in the UI.
 
@@ -75,7 +121,7 @@ snapshotted agent — even if the conversation was reassigned in between.
 
 **Team management:**
 Owners/admins connect channels (enter WhatsApp credentials, verify the email
-domain, provision the SMS number), set the routing strategy, define
+domain), set the routing strategy, define
 commission rules, and see a dashboard (response times, volume per channel,
 commission per agent). Agents see their own inbox and their commission tally.
 
@@ -104,8 +150,9 @@ Checks are inline `role in {...}` in handlers; there is no Permissions service.
 
 Relational shape (threads, append-only histories, joins for the dashboard) is
 why this is **Postgres, not DynamoDB** — deliberate decision carried from the
-original plan. Lives in the **shared RDS instance** in a dedicated
-`omnichannel` schema; never a second instance (cost principle). Every table
+original plan. Lives in the **shared Postgres instance** (a container on the
+EC2 at MVP, RDS at distribution — §12) in a dedicated `omnichannel` schema;
+never a second instance (cost principle). Every table
 carries `org_id` and every query filters on it (golden rule #2).
 
 | Table | Purpose / key columns *(validate against docx §6)* |
@@ -127,11 +174,22 @@ assigned_user_id, status`), thread view (`conversation_id, created_at`),
 full-text GIN on `messages.body_text` (tsvector), agent dashboard
 (`org_id, agent_user_id` on attributions).
 
+**`channel_type` is `TEXT`, never a Postgres `ENUM`** — validated by a
+Pydantic enum at the app layer only. A DB enum would force a migration
+across six tables for every new channel; adding a channel must never
+require a schema change.
+
 ### 5.2 Channel Adapters — one file per channel, one contract
 
 Everything channel-specific lives behind one Protocol (§7 has the code). The
 rest of the system — worker, routing, inbox — never knows which channel it's
 touching. Adding Instagram later = one new file + one registry entry.
+
+**Three invariants protect that promise** (violating any of them silently
+turns "add a channel" into a migration + infra project): `channel_type` is
+`TEXT` in Postgres (§5.1), all inbound webhooks share one generic route
+(§5.6), and all channels share one inbound SQS queue (§5.6). A new channel
+touches `adapters/` and the registry — nothing else, including infra.
 
 **Email adapter — wire to Core, don't bypass it.** `send_outbound` calls
 `core.email.send_email(org_id, service_type=ServiceType.OMNICHANNEL, ...)` —
@@ -139,23 +197,34 @@ never boto3 SES directly. That buys, for free: suppression checking, the
 50/hr/org rate limit, per-org config-set isolation, audit logging, and
 delivery-status events, all already built and tested in Core. **Inbound**
 email is service-owned (Core doesn't do inbound): SES receipt rule → S3 →
-Lambda reads the raw MIME via `core.storage`, parses with stdlib `email`,
-and feeds the same `normalize_inbound` path as any other channel.
+S3 event notification onto the shared inbound SQS queue
+(`channel_type=email`, §5.6) → the worker reads the raw MIME via
+`core.storage`, parses with stdlib `email`, resolves the org from the
+recipient address via `channel_connections`, and feeds the same
+`normalize_inbound` path as any other channel. No Lambda needed.
 
 **WhatsApp adapter:** Meta WhatsApp Cloud API (Graph API) over `httpx`.
 Inbound webhook verification = HMAC SHA-256 of the raw body against the app
 secret (`X-Hub-Signature-256`). Credentials (access token, phone-number ID,
 app secret) per org via `core.secrets`. Business-initiated messages outside
 the 24-hour customer-service window must use approved templates — surface
-that as a `SupportedFeatures`/adapter concern, not scattered `if`s.
+that as a `SupportedFeatures`/adapter concern, not scattered `if`s. (v1
+ships without templates, so v1 WhatsApp is reply-within-24h only — the
+accepted consequence is recorded in §15.)
 
-**SMS adapter:** provider API (e.g. SNS or Twilio-style — pick at build
-time) over `httpx`; delivery receipts via webhook; 10DLC registration is an
-infra/onboarding prerequisite, not code.
+**SMS adapter — deferred (§15).** Not built for v1. When added: provider API
+(e.g. SNS or Twilio-style — pick at build time) over `httpx`; delivery
+receipts via webhook; 10DLC registration is an infra/onboarding
+prerequisite, not code. Nothing else in the system changes to add it — that
+is the point of the adapter contract (§5.2, §7).
 
 ### 5.3 Routing & Presence
 
-Three strategies at launch, org-configurable:
+**v1 (minimal): manual claim + single-assignee only.** New conversations
+land unassigned in the shared inbox (or go to the designated user when
+single-assignee is configured); agents claim them. No presence system
+needed. The auto-strategies below are **deferred** (§15) — design kept for
+when they land:
 
 - **Round-robin** — new conversation goes to the *online* agent who has
   waited longest since their last auto-assignment. Skips offline/away agents;
@@ -165,22 +234,35 @@ Three strategies at launch, org-configurable:
 - **Single-assignee** — everything goes to one designated user (solo
   businesses; the owner *is* the inbox).
 
-`presence.py` keeps live status in Redis (shared cluster, keys
-`presence:{org_id}:{user_id}`, heartbeat TTL ~60s so a closed laptop decays
-to offline). The Postgres `presence` row is a backup/audit write, not read on
-the hot path. Every routing decision writes a `conversation_assignments` row
-and `core.audit.log_audit`.
+*(Deferred with auto-routing)* `presence.py` keeps live status in Redis
+(keys `presence:{org_id}:{user_id}`, heartbeat TTL ~60s so a closed laptop
+decays to offline); the Postgres `presence` row is a backup/audit write, not
+read on the hot path. **Built in v1 regardless:** every assignment (claim,
+reassign, single-assignee) writes an append-only `conversation_assignments`
+row and `core.audit.log_audit` — that history is cheap now and load-bearing
+for commission later.
 
 ### 5.4 Real-Time Inbox
 
 Agents' inboxes update live — new message, assignment change, delivery tick —
-via AppSync GraphQL subscriptions through the new `core.realtime.publish_update`
-(§6.2). Auth re-checks org membership on subscribe: a revoked membership must
-terminate the subscription on the next reconnect. Idle tabs (>5 min in
-background) drop to long-poll fallback — AppSync connection-minutes are a
-named cost vector (§10).
+through the new `core.realtime.publish_update` (§6.2). **MVP transport
+(single EC2, §12): Server-Sent Events.** The worker publishes to Redis
+pub/sub (`rt:{channel}`); the API process relays to browsers over SSE
+(`GET /omnichannel/stream`) — zero new dependencies, no AppSync bill.
+AppSync GraphQL subscriptions become the transport when the service is
+distributed; callers never change because everything goes through the
+facade. Auth re-checks org membership on connect: a revoked membership must
+terminate the stream on the next reconnect. Idle tabs (>5 min in
+background) close the stream and reconnect on focus.
 
 ### 5.5 Commission Attribution — the load-bearing business rule
+
+**Deferred (§15):** not built until Invoicing (Phase 2) exists —
+`invoice.paid` has no producer (§6.0). The *tables* still ship in the v1
+schema baseline (they cost nothing, and the append-only assignment history
+§5.3 is already being written), so when Invoicing lands this becomes
+subscriber code only. The rule below is locked now so nobody "simplifies"
+it in the meantime:
 
 **Snapshot the assigned agent at invoice-creation time, not payment time.**
 The agent who did the selling gets the credit, even if the conversation is
@@ -202,8 +284,15 @@ Webhook providers retry aggressively (Meta ~10s window); at-least-once
 delivery is the norm everywhere. Done wrong, this produces duplicate
 customer-visible messages. The pipeline, in order:
 
-**Inbound:** webhook Lambda: verify signature → ack fast (<2s p99, just
-validate + enqueue to the channel's SQS queue) ⇒ worker: dedupe on
+**Inbound:** generic webhook route `POST /webhooks/{channel_type}/{connection_id}`
+— one route for every channel; each org's channel connection registers its
+own URL, so `connection_id` resolves the org and its signing secret (via
+`core.secrets`) before anything else, and the adapter registry supplies
+signature verification — a new channel adds no routing code: resolve
+connection → verify signature → ack fast (<2s p99, just validate + enqueue
+to the **shared inbound SQS queue** with `channel_type` / `org_id` /
+`connection_id` message attributes — one queue for all channels; split a
+channel out only if its volume ever demands isolation) ⇒ worker: dedupe on
 `(channel_type, external_message_id)` (insert, treat unique-violation as
 already-processed no-op) → normalize via adapter → find-or-create identity +
 conversation → persist message + attachments (media to S3 via `core.storage`)
@@ -216,8 +305,8 @@ worker: adapter `send_outbound` (credentials via `core.secrets`) → store
 `external_message_id`, mark `sent` → publish `message.sent` + realtime update
 ⇒ later, delivery webhook → adapter `interpret_delivery_webhook` → status
 updates (`delivered`/`read`/`failed`) → realtime update. Failed sends: bounded
-retry with backoff, then DLQ + alarm — never blind infinite retry (SMS costs
-real money per attempt).
+retry with backoff, then DLQ + alarm — never blind infinite retry (WhatsApp
+sends cost real money per attempt).
 
 ---
 
@@ -231,10 +320,11 @@ The original plan assumed Invoicing (Phase 2) was already built. It is not:
 `app/services/invoicing/` is an empty stub; only `docs/phase2-invoicing.md`
 exists. Consequences:
 
-1. **The shared Postgres foundation does not exist yet** — no
-   `infra/modules/rds/`, no SQLAlchemy/asyncpg/alembic in `pyproject.toml`.
-   Whichever phase starts first builds it (per `docs/phase2-invoicing.md`
-   step 1); the other reuses it (shared instance, separate schema).
+1. **The shared Postgres foundation does not exist yet** — no Postgres
+   container anywhere, no SQLAlchemy/asyncpg/alembic in `pyproject.toml`.
+   Whichever phase starts first builds it (the container in §12, per
+   `docs/phase2-invoicing.md` step 1); the other reuses it (shared
+   instance, separate schema).
 2. **`invoice.paid` has no real producer yet.** Build the commission
    subscriber against the documented event shape with a synthetic event in
    tests; wire the real producer when Phase 2 lands.
@@ -256,7 +346,7 @@ exists. Consequences:
 | `core.rate_limit.check_and_increment(org_id, action, limit=..., window_seconds=...)` + `limits_for(action)` | Per-channel outbound limits from `app/config.py::RATE_LIMITS` (§6.4) — never hardcoded literals. |
 | `core.exceptions.CoreError` | Base of this service's errors (§8); each carries `status_code`, routers map it — zero new plumbing. |
 | `core.logging.get_logger(name)` | Structured JSON logs. Never configure logging yourself. |
-| `core.clients` | The **only** place AWS/Redis clients are built. New clients (Secrets Manager, AppSync) are added there as `@lru_cache` factories; every sync boto3 call goes through `await core.clients.run_aws(fn, ...)`. |
+| `core.clients` | The **only** place AWS/Redis clients are built. New clients (Secrets Manager now; AppSync at distribution) are added there as `@lru_cache` factories; every sync boto3 call goes through `await core.clients.run_aws(fn, ...)`. |
 
 ### 6.2 NEW Core modules required (promote, don't duplicate)
 
@@ -295,13 +385,15 @@ async def get_secret(org_id: str, service_type: str, key: str) -> dict[str, Any]
 
 ```python
 async def publish_update(org_id: str, channel: str, payload: dict[str, Any]) -> None:
-    """Push a real-time update to connected clients via AppSync.
+    """Push a real-time update to connected clients.
 
     - channel examples: f"org:{org_id}:conversations",
       f"conversation:{conversation_id}:messages"
-    - Wraps an AppSync GraphQL mutation that fans out to subscribers. The
-      HTTP call uses httpx (§7 deps) with IAM SigV4 signing via botocore's
-      SigV4Auth — no new signing library.
+    - The transport lives entirely behind this call. MVP (single EC2, §12):
+      Redis pub/sub (``rt:{channel}``, shared client) relayed to browsers as
+      SSE by the API process. Distribution phase: an AppSync GraphQL mutation
+      over httpx with IAM SigV4 signing via botocore's SigV4Auth — no new
+      signing library. Callers never change when the transport swaps.
     - Fire-and-forget from caller's perspective; errors logged, not swallowed.
 
     Raises: RealtimeError (CoreError, 502) only on config errors.
@@ -310,10 +402,12 @@ async def publish_update(org_id: str, channel: str, payload: dict[str, Any]) -> 
 ```
 
 > **Test-harness note (⚠ ADAPTED):** Core's integration tests run on **moto +
-> fakeredis**, not LocalStack. moto covers Secrets Manager (add the extra)
-> but has no usable AppSync data plane — unit-test `core.realtime` against a
-> stubbed transport (httpx `MockTransport`) and flag real-AWS verification
-> explicitly in the test plan; don't skip it silently.
+> fakeredis**, not LocalStack. moto covers Secrets Manager (add the extra).
+> The MVP Redis-pub/sub transport tests directly against fakeredis. When the
+> AppSync transport lands (distribution phase), moto has no usable AppSync
+> data plane — unit-test it against a stubbed transport (httpx
+> `MockTransport`) and flag real-AWS verification explicitly in the test
+> plan; don't skip it silently.
 
 ### 6.3 Cross-service rule (non-negotiable)
 
@@ -324,7 +418,7 @@ Invoicing publishes `invoice.paid` → Omni-Channel consumes (§5.5).
 **⚠ ADAPTED:** Core owns only the *publisher*. Subscribers are service-owned:
 an EventBridge **rule** on `a2z-bus` (`source = a2z.invoicing`,
 `detail-type = invoice.paid`) targets this service's **events SQS queue**;
-the Fargate worker consumes it. Rule + queue live in this service's
+the worker process (§12) consumes it. Rule + queue live in this service's
 Terragrunt modules (§12).
 
 ### 6.4 Rate-limit registry additions (`app/config.py`)
@@ -333,8 +427,7 @@ Terragrunt modules (§12).
 RATE_LIMITS: dict[str, tuple[int, int]] = {
     # ... existing entries ...
     "omnichannel.whatsapp.send": (80, 1),      # Meta pair-rate ceiling; tune per tier
-    "omnichannel.sms.send": (60, 60),          # provider throughput cap per org
-    "omnichannel.ai.classify": (500, 86400),   # Bedrock cost guard per org
+    # omnichannel.sms.send: add when SMS is un-deferred (§15) — provider throughput cap per org
     # email channel needs no new entry: core.email already enforces email.send
 }
 ```
@@ -355,9 +448,9 @@ Python 3.12 + FastAPI, same repo, same modular monolith.
 | Need | Use (already in `pyproject.toml`) |
 |---|---|
 | AWS calls | `boto3` (sync) via `core.clients` factories + `await run_aws(...)`. **No aioboto3.** |
-| Redis | `redis.asyncio` via `core.clients.redis_client()` — shared client, namespaced keys (`presence:{org_id}:*`, `secret:*`, `aiclass:{content_hash}`, `mediaurl:{key}`). |
+| Redis | `redis.asyncio` via `core.clients.redis_client()` — shared client, namespaced keys (`presence:{org_id}:*`, `secret:*`, `mediaurl:{key}`, `rt:*`). |
 | DTOs / validation | `pydantic` v2 — adapter types, models, everything. |
-| Config | `pydantic-settings` — new fields on `app/config.py::Settings` with env aliases (`APPSYNC_ENDPOINT`, `DATABASE_URL`, SQS queue URLs). No per-service config module. |
+| Config | `pydantic-settings` — new fields on `app/config.py::Settings` with env aliases (`DATABASE_URL`, SQS queue URLs; `APPSYNC_ENDPOINT` at distribution). No per-service config module. |
 | JWT | `python-jose`, already wrapped by `core.auth`; never used directly here. |
 | Webhook signatures | stdlib `hmac` + `hashlib`. No new dependency. |
 | Inbound MIME parsing | stdlib `email` package. No new dependency. |
@@ -369,7 +462,7 @@ Python 3.12 + FastAPI, same repo, same modular monolith.
 | Dependency | Why | Where |
 |---|---|---|
 | `sqlalchemy[asyncio]`, `asyncpg`, `alembic` | Postgres data layer — the same deps `docs/phase2-invoicing.md` step 1 earmarks for Invoicing. Add once; both services share. | `[project.dependencies]` |
-| `httpx` | Runtime HTTP for WhatsApp Graph API, SMS provider, AppSync mutations. Already a dev dep — promote. | move to `[project.dependencies]` |
+| `httpx` | Runtime HTTP for WhatsApp Graph API (and AppSync mutations at distribution; SMS provider when un-deferred). Already a dev dep — promote. | move to `[project.dependencies]` |
 | `moto[secretsmanager]`, `boto3-stubs[secretsmanager,sqs]` extras | Test/typing for the new AWS surfaces. | dev extras |
 
 **Explicitly NOT added (⚠ ADAPTED deviations):**
@@ -379,9 +472,10 @@ Python 3.12 + FastAPI, same repo, same modular monolith.
   the AWS-only principle and adds a dep Core doesn't have. CloudWatch Logs
   Insights + alarms + X-Ray cover it. Revisit deliberately only if exception
   grouping proves genuinely missing.
-- Any WebSocket library — real-time is AppSync via `core.realtime`, period.
-- A second Bedrock/AI client — define it once in `core/clients.py`; whichever
-  service ships first creates it, the other inherits.
+- Any WebSocket library — MVP real-time is SSE (a plain FastAPI streaming
+  response, zero new deps) fed by Redis pub/sub behind `core.realtime`;
+  AppSync takes over at distribution. Nothing ever imports a socket library.
+- Bedrock or any AI client — AI features are cut from v1 entirely (§15).
 
 **Adapter contract (Python, final):**
 
@@ -434,30 +528,28 @@ A2Z-Core/
 │   ├── services/omnichannel/          # ←★ THIS SERVICE (stub exists)
 │   │   ├── models.py                  # Pydantic DTOs + SQLAlchemy tables (§5.1)
 │   │   ├── db.py                      # async engine/session, "omnichannel" schema
-│   │   ├── adapters/                  # base.py, types.py, whatsapp.py, sms.py, email.py, registry.py
+│   │   ├── adapters/                  # base.py, types.py, whatsapp.py, email.py, registry.py (sms.py when un-deferred, §15)
 │   │   ├── routing.py                 # §5.3 strategies
 │   │   ├── presence.py                # Redis-backed presence
 │   │   ├── commission.py              # §5.5 attribution + invoice.paid handler
 │   │   ├── handlers.py                # business logic called by routers
-│   │   ├── webhooks/                  # whatsapp_webhook.py, sms_webhook.py, ses_inbound.py
-│   │   └── worker.py                  # Fargate worker: SQS consumer (§5.6)
-│   ├── routers/omnichannel.py         # thin HTTP layer, mounted in app/main.py
-│   └── lambdas/                       # thin entrypoints → services/omnichannel/webhooks
-│       ├── omnichannel_whatsapp_webhook.py
-│       ├── omnichannel_sms_webhook.py
-│       └── omnichannel_ses_inbound.py
+│   │   ├── webhooks/                  # generic dispatch: verify via adapter registry, enqueue (§5.6)
+│   │   └── worker.py                  # worker process: SQS consumer (§5.6)
+│   ├── routers/omnichannel.py         # thin HTTP layer incl. POST /webhooks/{channel_type}/{connection_id},
+│   │                                  # mounted in app/main.py — no per-channel Lambdas
 ├── infra/
-│   ├── modules/                       # NEW: rds (if Phase 2 hasn't built it), appsync,
-│   │   ...                            #      secretsmanager-channels, sqs-omnichannel,
-│   │                                  #      ses-receipt-rules, omnichannel-worker, lambda-webhooks
+│   ├── modules/                       # NEW (§12): ec2-app, sqs-omnichannel,
+│   │   ...                            #      secretsmanager-channels, ses-receipt-rules
 │   └── live/prod/<name>/terragrunt.hcl   # one live folder per module — existing layout
 └── tests/{unit,integration,load}/omnichannel/
 ```
 
-**Reused, not re-provisioned:** the RDS instance (new schema), the Redis
-cluster (new namespaces), the SES sending pipeline (via `core.email`), Core's
-VPC/IAM modules. Alembic migrations live with the service; DynamoDB backfill
-scripts stay in `infra/migrations/` per root CLAUDE.md §9.
+**Reused, not re-provisioned:** the box's Postgres container (new
+`omnichannel` schema — Invoicing adds its own schema to the same container
+later), the Redis container (new namespaces), the SES sending pipeline (via
+`core.email`), Core's VPC/IAM modules. Alembic migrations live with the
+service; DynamoDB backfill scripts stay in `infra/migrations/` per root
+CLAUDE.md §9.
 
 ## 10. Cost & Caching (all via the shared Redis client)
 
@@ -466,47 +558,97 @@ second cache system:
 
 | Cost vector | Mitigation |
 |---|---|
-| Bedrock calls | `aiclass:{content_hash}`, 24h TTL; suggested replies on explicit click only, never per-message |
 | SES volume | batch notifications ("3 new messages"), org's own verified domain (Core config sets already per org/service) |
-| SMS | 10DLC upfront; sticky-route to same number per customer; backoff, never blind retry |
-| AppSync minutes | idle tabs → long-poll after 5 min |
-| RDS IO | messages >12 months to cold partition; hot inbox queries never touch archive |
+| Real-time fan-out | SSE on-box = $0 at MVP; idle tabs close streams after 5 min (matters again when AppSync lands) |
+| Postgres bloat | messages >12 months to cold partition; hot inbox queries never touch archive |
 | S3 egress | `mediaurl:{key}` signed-URL cache, 1h TTL (< signed expiry) |
-| NAT Gateway | VPC endpoints for S3, SQS, Secrets Manager, SES, Bedrock — extend the existing `vpc` module; the silent-killer line item |
+| NAT Gateway | none at MVP — the EC2 sits in a public subnet with its own IPv4; at distribution, add VPC endpoints for S3/SQS/Secrets Manager/SES *before* adding a NAT (the silent-killer line item) |
 | Secrets Manager API | 5-min Redis TTL in `core.secrets` (§6.2) |
 
-Reusing shared RDS + Redis avoids a second ~$15–25/mo instance and ~$12/mo
-cluster — the single biggest DRY-driven cost win here. Estimated fixed spend
-at MVP (~50 orgs): ≈$130/mo; SES/SMS usage passes through to customers.
+**MVP fixed spend (single EC2, §12):**
+
+| Item | Est. monthly |
+|---|---|
+| EC2 t4g.medium (4 GB — API + worker + Postgres + Redis) | ~$25 |
+| EBS gp3 50 GB + snapshots | ~$5 |
+| Public IPv4 | ~$4 |
+| Secrets Manager | ~$0.40 per channel credential |
+| DynamoDB / S3 / SES / EventBridge / SQS / CloudWatch | usage-based, ~$1–10 |
+
+≈ **$35–45/mo all-in**, vs ≈$130/mo for the distributed shape (Fargate +
+RDS + ElastiCache + NAT + ALB) — same code, different Terragrunt. SES
+usage passes through to customers (WhatsApp is free-tier for
+customer-initiated conversations; SMS pass-through applies once un-deferred).
 
 ## 11. Observability (CloudWatch only — ⚠ ADAPTED: no Sentry)
 
 - Structured JSON logs via `core.logging` with `request_id` /
-  `conversation_id` / `message_id` threaded through every line of a flow.
-- X-Ray on all Lambdas + worker/API; webhook → SQS → worker → EventBridge →
-  AppSync traceable as one trace.
+  `conversation_id` / `message_id` threaded through every line of a flow —
+  the primary trace at MVP (one box, one log group via the CloudWatch
+  agent). Add X-Ray when the service is distributed, not before.
 - Namespace `A2Z/OmniChannel`: `WebhookAckLatencyMs` per channel (alarm p99
   > 2s — Meta's retry window is ~10s), `MessageProcessingLatencyMs` (receipt
   → visible in inbox), `RoutingLatencyMs`, `SendSuccessRate`/`SendFailureRate`
-  per channel, `AICacheHitRate`, `ActiveAppSyncConnections`.
-- Alarms: any DLQ depth > 0, webhook ack p99 breach, send failure rate > 5%.
+  per channel, `ActiveSSEStreams` (becomes `ActiveAppSyncConnections` at
+  distribution).
+- Alarms: any DLQ depth > 0, webhook ack p99 breach, send failure rate > 5%,
+  EC2 status-check failure, disk > 80% (Postgres lives on this box), nightly
+  backup job failure (§12).
 
-## 12. Terragrunt (follow the existing `infra/` layout exactly)
+## 12. Deployment & Terragrunt — single-EC2 MVP (⚠ ADAPTED 2026-07-12)
 
-New `infra/modules/`: `rds/` (only if Phase 2 hasn't built it), `appsync/`,
-`secretsmanager-channels/`, `sqs-omnichannel/` (inbound-per-channel +
-outbound + events queues, DLQs on all, plus the EventBridge rule targeting
-the events queue, §6.3), `ses-receipt-rules/`, `omnichannel-worker/`,
-`lambda-webhooks/`. Each gets a matching `infra/live/prod/<name>/terragrunt.hcl`
-like the nine existing ones. Reused unmodified: `vpc` (+ endpoints), `iam`,
-`redis`, `s3`, `ses`, `eventbridge`, `dynamodb`. Mirror what tests need in
-`scripts/create_local_resources.py`.
+MVP runs the whole platform on **one EC2 instance** (t4g.medium, 4 GB —
+sized for four co-located workloads; public subnet; docker-compose or
+systemd units):
+
+- **api** — the FastAPI monolith (Core + this service's routers, including
+  the generic webhook route §5.6 and the SSE stream §5.4). TLS terminates
+  on-box via Caddy (Let's Encrypt) — webhook providers require valid HTTPS;
+  no ALB.
+- **worker** — the SQS consumer process (§5.6). Same image, different
+  entrypoint.
+- **postgres** — container, `omnichannel` schema (Invoicing adds its own
+  schema to this same container later). **Nightly `pg_dump` to S3, 30-day
+  retention, restore-tested — non-negotiable: there is no RDS safety net.**
+- **redis** — container, cache/ephemeral semantics only (presence,
+  rate-limit windows, caches, pub/sub — all safe to lose on restart); no
+  persistence config.
+
+Managed AWS services stay managed — they are usage-based (~$0 at MVP) *and*
+they are the seams that make later distribution cheap: DynamoDB, S3, SES,
+EventBridge, **SQS (keep it — the webhook-ack/worker seam; an in-process
+queue would save nothing and cost the distribution path)**, **Secrets
+Manager (keep it — no credential migration at distribution time)**.
+
+**Deliberately deferred to the distribution phase (do not build now):**
+ECS/Fargate, RDS, ElastiCache, ALB, NAT + interface VPC endpoints, AppSync,
+per-channel webhook Lambdas. Distributing later = re-point Terragrunt, move
+Postgres/Redis to managed instances, and swap the `core.realtime` transport
+— application code does not change.
+
+**Known MVP trade-offs (accepted):** single point of failure — a reboot
+takes down webhook endpoints (providers retry with backoff, so brief deploys
+are fine; extended downtime loses messages), and Postgres durability is our
+job (hence the backup rule above).
+
+New `infra/modules/`: `ec2-app/` (instance, EIP, security group, IAM
+instance profile reusing the `iam` module's policies), `sqs-omnichannel/`
+(**one shared inbound queue** §5.6 + outbound + events queues, DLQs on all,
+the EventBridge rule targeting the events queue §6.3, and the S3 event
+notification for inbound email §5.2), `secretsmanager-channels/`,
+`ses-receipt-rules/`. Each gets a matching
+`infra/live/prod/<name>/terragrunt.hcl` like the nine existing ones. Reused
+unmodified: `vpc` (gateway endpoints only), `iam`, `s3`, `ses`,
+`eventbridge`, `dynamodb`. **Not applied at MVP:** the `redis` and `ecs`
+live modules (superseded by the on-box containers until distribution).
+Mirror what tests need in `scripts/create_local_resources.py`.
 
 ## 13. Build Order (⚠ ADAPTED for actual repo state)
 
 **Step 0 — Prerequisite check:** Core suite green locally. Decide Phase 2/3
-ordering: if Invoicing hasn't built the RDS foundation, Step 2 here includes
-it (Invoicing reuses it later).
+ordering: if Invoicing hasn't built the shared Postgres foundation (the
+container in §12 + the SQLAlchemy/alembic deps), Step 2 here includes it
+(Invoicing reuses it later).
 
 **Step 1 — Core unfreeze (one deliberate change):** `core/secrets.py` +
 `core/realtime.py` + client factories in `core/clients.py` + `Settings`
@@ -514,29 +656,35 @@ fields + `RATE_LIMITS` entries + root CLAUDE.md module-table rows + any new
 `ActionType`/error classes. Full Core suite + coverage bar green. Re-freeze.
 
 **Step 2 — Data layer:** deps (`sqlalchemy[asyncio]`, `asyncpg`, `alembic`,
-promote `httpx`), `infra/modules/rds/` if needed, `omnichannel` schema,
-Alembic baseline with all tables/indexes/the unique constraint (§5.1).
-Postgres added to `docker-compose.yml` for local/integration tests. Record
-§14 decisions in `docs/omnichannel-decisions.md` first.
+promote `httpx`), the shared Postgres container (§12), `omnichannel` schema,
+Alembic baseline with all tables/indexes/the unique constraint (§5.1) —
+`channel_type` as `TEXT`. Postgres added to `docker-compose.yml` for
+local/integration tests. Record §14 decisions in
+`docs/omnichannel-decisions.md` first.
 
 **Step 3 — Adapter contract + Email adapter first** — reuses `core.email`
 almost entirely, so it validates the adapter pattern with the least new
 surface area.
 
-**Step 4 — SMS adapter, then WhatsApp adapter** — each: webhook Lambda,
-normalize, send, delivery interpretation, credentials via `core.secrets`.
+**Step 4 — WhatsApp adapter:** registry entry (webhooks arrive via the
+generic route, §5.6), normalize, send, delivery interpretation, credentials
+via `core.secrets`. (SMS adapter deferred, §15 — add the same way when
+un-deferred.)
 
-**Step 5 — End-to-end message flow (§5.6):** webhook → SQS → worker →
+**Step 5 — End-to-end message flow (§5.6):** webhook route → SQS → worker →
 persistence → `core.events` fan-out; webhook-retry/duplicate tests.
 
-**Step 6 — Routing + presence (§5.3).**
-**Step 7 — Real-time inbox (§5.4)** via `core.realtime`, idle-tab backpressure.
-**Step 8 — Commission (§5.5)** — synthetic `invoice.paid` fixture until
-Phase 2 exists (§6.0).
-**Step 9 — AI features** — on-demand summary + suggested reply via Bedrock,
-with the classification cache (§10).
-**Step 10 — Load + integration tests,** latency targets from §11, DLQ/alarm
+**Step 6 — Assignment (§5.3, v1 scope):** manual claim/reassign +
+single-assignee, append-only `conversation_assignments` rows + audit. No
+presence, no auto-routing (deferred, §15).
+**Step 7 — Real-time inbox (§5.4)** via `core.realtime` (SSE + Redis
+pub/sub), idle-tab backpressure.
+**Step 8 — Load + integration tests,** latency targets from §11, DLQ/alarm
 wiring, then freeze.
+
+Cut/deferred from the original order (§15): commission (waits for Invoicing;
+its tables are already in the Step 2 baseline), auto-routing + presence,
+templates, AI features (cut entirely).
 
 ## 14. Open Decisions — record in `docs/omnichannel-decisions.md` before Step 2
 
@@ -550,16 +698,36 @@ wiring, then freeze.
    half-implemented already; make it a real decision.
 4. Voice transcription budget shape (v1.5, but leave pricing-tier room).
 5. Public Inbox API day one vs. post-launch.
-6. Pricing tier shape ($49–79/mo + SMS/WhatsApp pass-through) —
-   Settings/Billing need the shape, not this service's code.
+6. Pricing tier shape ($49–79/mo + WhatsApp pass-through, SMS pass-through
+   once un-deferred) — Settings/Billing need the shape, not this service's
+   code.
 
 ## 15. Out of Scope (don't add now)
 
-Instagram DM / Messenger (v1.1 — two more adapter files, nothing else
-changes), voice/Amazon Connect (v1.5), skill-based routing & SLA escalation
-(v2), split commissions (v1.5 — schema already allows multiple attributions
-per invoice), public Inbox API (post-launch), a Permissions service (never —
-inline role checks).
+**Cut/deferred in the 2026-07-12 minimal-scope revision:**
+
+- **AI features** (Bedrock summaries, suggested replies, classification
+  cache, its rate limit) — cut entirely; re-propose as a separate phase if
+  ever wanted.
+- **Auto-routing (round-robin, sticky) + presence** — v1 is manual claim +
+  single-assignee (§5.3). The append-only assignment history is still
+  written from day one, so adding auto-routing later is routing code only.
+- **Templates** — deferred. Accepted consequence: without WhatsApp-approved
+  templates, agents can only reply inside WhatsApp's 24-hour
+  customer-service window; business-initiated WhatsApp messages are not
+  possible in v1. Email is unaffected.
+- **SMS channel** — deferred. v1 ships WhatsApp + email only. The adapter
+  contract (§5.2, §7) makes this add-later: one new adapter file + a
+  registry entry, no changes to routing, storage, or infra.
+- **Commission attribution (§5.5)** — waits for Invoicing (Phase 2); its
+  tables ship in the v1 schema so it's subscriber code only when it lands.
+- **Dashboards/analytics** — v1 has ops metrics (§11) only.
+
+**Later versions / never:** Instagram DM / Messenger (v1.1 — two more
+adapter files, nothing else changes), voice/Amazon Connect (v1.5),
+skill-based routing & SLA escalation (v2), split commissions (v1.5 — schema
+already allows multiple attributions per invoice), public Inbox API
+(post-launch), a Permissions service (never — inline role checks).
 
 ## 16. Definition of Done
 
@@ -570,19 +738,27 @@ inline role checks).
       aws-secretsmanager-caching).
 - [ ] `omnichannel` Postgres schema with all §5.1 tables + indexes + the
       `(channel_type, external_message_id)` unique constraint.
-- [ ] Email/SMS/WhatsApp adapters implement `ChannelAdapter`; each swappable
-      and testable in isolation; email goes through `core.email` only.
+- [ ] Email/WhatsApp adapters implement `ChannelAdapter` (SMS deferred,
+      §15); each swappable and testable in isolation; email goes through
+      `core.email` only.
 - [ ] Inbound/outbound flows match §5.6; webhook-retry/duplicate tests pass;
       all rate limits read from `app/config.py::RATE_LIMITS`.
-- [ ] Routing (round-robin, sticky, single-assignee) + Redis presence
-      working; AppSync real-time via `core.realtime` with idle-tab
-      backpressure.
-- [ ] Commission snapshots at invoice-creation; `invoice.paid` subscriber
-      tested (synthetic event until Phase 2); refund reversal path tested.
+- [ ] v1 assignment working (manual claim/reassign + single-assignee) with
+      append-only assignment history; SSE real-time via `core.realtime`
+      (Redis pub/sub transport) with idle-tab backpressure.
+- [ ] Extensibility invariants hold (§5.2): `channel_type` is `TEXT`, one
+      generic webhook route, one shared inbound queue — adding a channel
+      touches only `adapters/` + the registry.
+- [ ] Commission tables present in the baseline schema (feature itself
+      deferred with Invoicing, §15 — the invoice-creation snapshot rule in
+      §5.5 stays locked for when it's built).
 - [ ] All §10 cost mitigations implemented, not deferred.
 - [ ] CloudWatch logs / X-Ray / `A2Z/OmniChannel` metrics / alarms live.
-- [ ] Terragrunt modules applied per the existing layout; local resources
-      mirrored in `scripts/create_local_resources.py`.
+- [ ] Terragrunt modules applied per §12 (single-EC2 shape; deferred modules
+      not built); local resources mirrored in
+      `scripts/create_local_resources.py`.
+- [ ] Nightly Postgres `pg_dump` to S3 running, 30-day retention, and a
+      restore actually tested (§12).
 - [ ] `ruff` + `mypy --strict` clean; unit + integration + load green; >90%
       coverage on the service package; cross-org isolation proven per table;
       `docs/events.md` updated with every new event type.

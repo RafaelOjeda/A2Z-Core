@@ -59,7 +59,9 @@ a2z/
 │   │   ├── audit.py               # append-only event log (DynamoDB)
 │   │   ├── settings.py            # org config + cached reads + invoice counter
 │   │   ├── events.py              # ←★ NEW: EventBridge publish (see §6 below)
-│   │   └── rate_limit.py          # ←★ NEW: Redis sliding-window limiter (see §7)
+│   │   ├── rate_limit.py          # ←★ NEW: Redis sliding-window limiter (see §7)
+│   │   ├── secrets.py             # ←★ NEW (2026-07-12): per-org/per-service credentials (Omni-Channel §6.2)
+│   │   └── realtime.py            # ←★ NEW (2026-07-12): fan-out to connected clients (Omni-Channel §6.2)
 │   │
 │   ├── services/                  # stubs until Phase 2+
 │   │   ├── invoicing/             # Phase 2
@@ -102,6 +104,8 @@ Full signatures, args, returns, errors, and performance targets are in **`A2Z_Co
 | `settings` | org config, cached reads, invoice counter | DynamoDB `a2z-core-settings` + Redis | Design §2.6 |
 | `events` | **NEW** publish cross-service events | EventBridge | §6 below |
 | `rate_limit` | **NEW** sliding-window limits | Redis | §7 below |
+| `secrets` | **NEW (2026-07-12)** per-org/per-service credential access, Redis-cached | Secrets Manager + Redis | `app/services/omnichannel/CLAUDE.md` §6.2 |
+| `realtime` | **NEW (2026-07-12)** fan-out to connected clients | Redis pub/sub (MVP; AppSync at distribution) | `app/services/omnichannel/CLAUDE.md` §6.2 |
 
 DynamoDB table schemas (PK/SK/GSI) are in **Design §3.1**. S3 key layout in **Design §3.3**. Implement exactly these — they are load-bearing for the access patterns.
 
@@ -357,10 +361,11 @@ Order chosen by dependency depth:
 - [x] Cognito post-confirm Lambda + SES SNS Lambda implemented and idempotent.
 - [x] `events` and `rate_limit` modules implemented (the two gaps).
 - [x] Retention TTLs and on-demand billing chosen and applied.
-- [x] Unit + integration + load suites green; perf targets met; cross-org isolation proven. *(74 tests, 93% core coverage — reproduced 2026-07-07 under Python 3.12.)*
+- [x] Unit + integration + load suites green; perf targets met; cross-org isolation proven. *(81 tests, 93% core coverage — reproduced 2026-07-12 under Python 3.12.)*
 - [x] `ruff` + `mypy --strict` clean.
 - [x] `docs/events.md`, `docs/retention.md`, `docs/cost-notes.md` written.
 - [x] `app/main.py` boots, `/health` checks DynamoDB + Redis, and the admin router can create an org, add a member, change settings, and send a test email end-to-end against LocalStack. *(Exercised by `tests/integration/test_api.py::test_full_admin_flow` — moto stands in for LocalStack, same code paths.)*
+- [x] `secrets` + `realtime` modules implemented to Core's bar (unit + integration tests, cross-org isolation, docstrings with perf targets) per the Omni-Channel unfreeze protocol (`app/services/omnichannel/CLAUDE.md` §6.2, Build Order Step 1). Full suite re-verified green with no regressions; Core re-frozen.
 
 When all boxes are checked, Core is frozen and Invoicing (Phase 2) can begin.
 **Status: all boxes checked — Core is frozen. Phase 2 kickoff roadmap: `docs/phase2-invoicing.md`.**

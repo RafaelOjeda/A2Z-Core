@@ -98,3 +98,21 @@ class AuditError(CoreError):
 # --- Events (500) ---
 class EventError(CoreError):
     status_code = 500
+
+
+# --- Secrets (400 / 404) ---
+class SecretsError(CoreError):
+    status_code = 400
+
+
+class SecretNotFoundError(SecretsError):
+    """No secret exists at the given org/service/key."""
+
+    status_code = 404
+
+
+# --- Realtime (502) ---
+class RealtimeError(CoreError):
+    """Failed to publish a real-time update (config/connectivity failure)."""
+
+    status_code = 502

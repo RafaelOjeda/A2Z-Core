@@ -731,8 +731,13 @@ already allows multiple attributions per invoice), public Inbox API
 
 ## 16. Definition of Done
 
-- [ ] `core/secrets.py` + `core/realtime.py` built to Core's bar, module
+- [x] `core/secrets.py` + `core/realtime.py` built to Core's bar, module
       table updated, full Core suite green (no regressions), Core re-frozen.
+      *(Done 2026-07-12 — Build Order Step 1. 81 tests, 93% core coverage,
+      `ruff` + `mypy --strict` clean. `realtime.publish_update` ships as
+      Redis pub/sub only for now, matching the single-EC2 MVP transport in
+      §5.4/§12 — no AppSync client exists yet; that's added when the
+      service distributes.)*
 - [ ] `sqlalchemy[asyncio]`/`asyncpg`/`alembic` added once; `httpx` promoted;
       no non-conforming deps (no Sentry, no aioboto3, no
       aws-secretsmanager-caching).

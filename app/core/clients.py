@@ -31,6 +31,7 @@ if TYPE_CHECKING:  # import only for type checkers; avoids runtime cost
     from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_events import EventBridgeClient
     from mypy_boto3_s3 import S3Client
+    from mypy_boto3_secretsmanager import SecretsManagerClient
     from mypy_boto3_ses import SESClient
     from mypy_boto3_sns import SNSClient
 
@@ -80,6 +81,11 @@ def eventbridge() -> EventBridgeClient:
 
 
 @lru_cache(maxsize=1)
+def secretsmanager() -> SecretsManagerClient:
+    return cast("SecretsManagerClient", _client("secretsmanager"))
+
+
+@lru_cache(maxsize=1)
 def redis_client() -> aioredis.Redis[str]:
     """Shared async Redis client (decodes responses to str)."""
     return aioredis.from_url(settings().redis_url, decode_responses=True)
@@ -92,7 +98,7 @@ async def run_aws[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 
 def reset_clients() -> None:
     """Clear cached clients. Used by tests after pointing at a fresh backend."""
-    for factory in (dynamodb, s3, ses, sns, eventbridge, redis_client):
+    for factory in (dynamodb, s3, ses, sns, eventbridge, secretsmanager, redis_client):
         # redis_client may be monkeypatched in tests (no lru_cache wrapper).
         clear = getattr(factory, "cache_clear", None)
         if clear is not None:

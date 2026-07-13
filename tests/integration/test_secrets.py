@@ -44,9 +44,7 @@ async def test_cross_org_isolation(aws: None) -> None:
     assert b == {"token": "b"}
 
 
-async def test_cache_hit_skips_second_aws_call(
-    aws: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_cache_hit_skips_second_aws_call(aws: None, monkeypatch: pytest.MonkeyPatch) -> None:
     await _seed("org-a", "omnichannel", "whatsapp", {"token": "a"})
     await secrets.get_secret("org-a", "omnichannel", "whatsapp")  # primes the cache
 

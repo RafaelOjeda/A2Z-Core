@@ -16,9 +16,7 @@ async def test_publish_update_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     redis = AsyncMock()
     monkeypatch.setattr(clients, "redis_client", lambda: redis)
 
-    await realtime.publish_update(
-        "org-a", "org:org-a:conversations", {"type": "message.received"}
-    )
+    await realtime.publish_update("org-a", "org:org-a:conversations", {"type": "message.received"})
 
     redis.publish.assert_called_once()
     channel, message = redis.publish.call_args.args

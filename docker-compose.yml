@@ -1,6 +1,9 @@
 # Local dev backing services. Brings up LocalStack (DynamoDB, S3, SES, SNS,
-# EventBridge) and Redis so integration tests have something real-ish to hit.
-# Cognito is not emulated — tests use auth.create_test_token instead.
+# EventBridge), Redis, and Postgres so integration tests have something
+# real-ish to hit. Cognito is not emulated — tests use auth.create_test_token
+# instead. Postgres backs Omni-Channel's data layer (shared instance,
+# service-owned schemas — CLAUDE.md §2/§12, app/services/omnichannel/
+# CLAUDE.md §12): one container serves every service's Postgres schema.
 services:
   localstack:
     image: localstack/localstack:3
@@ -22,6 +25,20 @@ services:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=a2z
+      - POSTGRES_PASSWORD=a2z-local-dev-only
+      - POSTGRES_DB=a2z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U a2z -d a2z"]
       interval: 5s
       timeout: 3s
       retries: 10

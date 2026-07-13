@@ -738,11 +738,24 @@ already allows multiple attributions per invoice), public Inbox API
       Redis pub/sub only for now, matching the single-EC2 MVP transport in
       §5.4/§12 — no AppSync client exists yet; that's added when the
       service distributes.)*
-- [ ] `sqlalchemy[asyncio]`/`asyncpg`/`alembic` added once; `httpx` promoted;
+- [x] `sqlalchemy[asyncio]`/`asyncpg`/`alembic` added once; `httpx` promoted;
       no non-conforming deps (no Sentry, no aioboto3, no
-      aws-secretsmanager-caching).
-- [ ] `omnichannel` Postgres schema with all §5.1 tables + indexes + the
+      aws-secretsmanager-caching). *(Done 2026-07-13 — Build Order Step 2.)*
+- [x] `omnichannel` Postgres schema with all §5.1 tables + indexes + the
       `(channel_type, external_message_id)` unique constraint.
+      *(`app/services/omnichannel/models.py` + Alembic baseline
+      `migrations/versions/0001_baseline_schema.py`; `channel_type` is
+      `TEXT` everywhere per the extensibility invariant, guarded by a test.
+      Upgrade/downgrade/re-upgrade verified against a real local Postgres 16
+      — column-by-column, including the hand-added full-text GIN index that
+      autogenerate can't produce. §14 decisions recorded first in
+      `docs/omnichannel-decisions.md`. `docker-compose.yml` and CI
+      (`.github/workflows/ci.yml`) both gained a `postgres` service — the
+      one exception to Core's moto/fakeredis-only test posture, since
+      there's no in-process Postgres emulator. 5 new integration tests
+      under `tests/integration/omnichannel/` cover the idempotency unique
+      constraint, the identity unique constraint, FK enforcement, cross-org
+      query isolation, and the `channel_type` TEXT invariant.)*
 - [ ] Email/WhatsApp adapters implement `ChannelAdapter` (SMS deferred,
       §15); each swappable and testable in isolation; email goes through
       `core.email` only.

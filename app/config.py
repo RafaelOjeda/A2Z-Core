@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # --- Redis ---
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
+    # --- Postgres (shared instance, service-owned schemas -- Omni-Channel first) ---
+    database_url: str = Field(
+        default="postgresql+asyncpg://a2z:a2z-local-dev-only@localhost:5432/a2z",
+        alias="DATABASE_URL",
+    )
+
     # --- DynamoDB table names ---
     ddb_membership_table: str = Field(default="a2z-core-membership", alias="DDB_MEMBERSHIP_TABLE")
     ddb_audit_table: str = Field(default="a2z-core-audit", alias="DDB_AUDIT_TABLE")

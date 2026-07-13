@@ -1,8 +1,11 @@
 # A2Z Core CI — enforces the Phase 1 exit criteria (CLAUDE.md §13/§15):
 # ruff + mypy --strict clean, full suite green, core/ coverage >= 90%.
 #
-# No service containers: the whole suite (including "integration") runs
-# in-process on moto + fakeredis (see tests/conftest.py).
+# Core's own suite runs in-process on moto + fakeredis (see tests/conftest.py)
+# -- no service container needed. Omni-Channel's Postgres data-layer tests
+# (tests/integration/omnichannel/) are the one exception: there is no
+# in-process Postgres emulator equivalent to moto, so the `test` job runs a
+# real `postgres` service container (app/services/omnichannel/CLAUDE.md §12).
 name: ci
 
 on:
@@ -27,6 +30,22 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: a2z
+          POSTGRES_PASSWORD: a2z-local-dev-only
+          POSTGRES_DB: a2z
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2z -d a2z"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://a2z:a2z-local-dev-only@localhost:5432/a2z
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -28,6 +28,18 @@ class WebhookSignatureError(OmniChannelError):
     status_code = 401
 
 
+class ConnectionNotFoundError(OmniChannelError):
+    """No channel connection exists for the given connection_id (§5.6).
+
+    Not in the original §8 list -- added when building the generic webhook
+    route (Step 5): resolving ``connection_id`` to an org needs a distinct
+    404 from ``WebhookSignatureError``'s 401, since an unknown connection
+    was never signed by anyone in the first place.
+    """
+
+    status_code = 404
+
+
 class RoutingError(OmniChannelError):
     """The routing strategy could not assign a conversation."""
 

@@ -57,6 +57,20 @@ class Settings(BaseSettings):
     s3_bucket: str = Field(default="a2z-ledger", alias="S3_BUCKET")
     event_bus_name: str = Field(default="a2z-bus", alias="EVENT_BUS_NAME")
 
+    # --- SQS (Omni-Channel's shared inbound/outbound queues, §5.6/§12) ---
+    omnichannel_inbound_queue: str = Field(
+        default="a2z-omnichannel-inbound", alias="OMNICHANNEL_INBOUND_QUEUE"
+    )
+    omnichannel_inbound_dlq: str = Field(
+        default="a2z-omnichannel-inbound-dlq", alias="OMNICHANNEL_INBOUND_DLQ"
+    )
+    omnichannel_outbound_queue: str = Field(
+        default="a2z-omnichannel-outbound", alias="OMNICHANNEL_OUTBOUND_QUEUE"
+    )
+    omnichannel_outbound_dlq: str = Field(
+        default="a2z-omnichannel-outbound-dlq", alias="OMNICHANNEL_OUTBOUND_DLQ"
+    )
+
     # --- Cognito ---
     cognito_user_pool_id: str = Field(default="", alias="COGNITO_USER_POOL_ID")
     cognito_region: str = Field(default="us-east-1", alias="COGNITO_REGION")

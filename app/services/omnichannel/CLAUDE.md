@@ -790,8 +790,45 @@ already allows multiple attributions per invoice), public Inbox API
       wrapping, status-webhook mapping) plus a 2-test registry update;
       `ruff` + `mypy --strict` clean; full suite green — 112 tests, no
       regressions.)*
-- [ ] Inbound/outbound flows match §5.6; webhook-retry/duplicate tests pass;
-      all rate limits read from `app/config.py::RATE_LIMITS`.
+- [x] Inbound/outbound flows match §5.6; webhook-retry/duplicate tests pass;
+      all rate limits read from `app/config.py::RATE_LIMITS`. *(Done
+      2026-07-16 — Build Order Step 5. Generic webhook route
+      (`POST /omnichannel/webhooks/{channel_type}/{connection_id}`,
+      `app/routers/omnichannel.py`) resolves the connection, verifies the
+      signature via the adapter registry, and enqueues to a new shared
+      inbound SQS queue (`app/services/omnichannel/queues.py`) — ack-fast,
+      no DB writes on the request path. `worker.py` drains it: dedupe via a
+      SAVEPOINT around the `(channel_type, external_message_id)` insert
+      (catching the unique-violation as a no-op, not the whole
+      transaction), find-or-create identity + conversation, persist the
+      message (+ attachments to S3 via `core.storage`), then
+      `core.events.publish_event("message.received")` +
+      `core.realtime.publish_update`. Routing/assignment is explicitly left
+      to Step 6 — new conversations land unassigned. Outbound mirrors it:
+      `handlers.send_reply` (new) does membership/role authz — GUEST is the
+      closest fit to §4's "Viewer" since `core.membership.Role` only has
+      OWNER/ADMIN/MEMBER/GUEST, not Owner/Admin/Agent/Viewer, a terminology
+      gap worth flagging — rate-limits via the channel's
+      `omnichannel.{channel_type}.send` entry when one exists (email
+      deliberately has none; `core.email` already enforces its own),
+      persists as `queued`, and enqueues to a new outbound SQS queue; the
+      worker sends via the adapter, marks `sent`/`external_message_id`, and
+      publishes `message.sent`. Failed sends are left in the queue (not
+      deleted) so SQS's own visibility-timeout retry applies, up to 5
+      attempts, after which the message is marked `failed` and dropped
+      (real DLQ redrive + CloudWatch alarm wiring is Step 8). New
+      `sqs()` client factory in `core/clients.py` (a client accessor, not a
+      new Core module — doesn't trigger the full module-unfreeze protocol
+      that `secrets.py`/`realtime.py` needed) plus queue provisioning in
+      `scripts/create_local_resources.py` (DLQs created first so the main
+      queues' redrive policies can reference their ARNs). 11 new integration
+      tests under `tests/integration/omnichannel/test_message_flow.py`
+      covering the full inbound/outbound pipeline, webhook-retry
+      idempotency, signature rejection, and outbound retry/exhaustion
+      against real Postgres + moto SQS/Secrets Manager/EventBridge +
+      fakeredis — full suite green at 123 (up from 112), `ruff` +
+      `mypy --strict` clean. `docs/events.md` gained `message.received` /
+      `message.sent`.)*
 - [ ] v1 assignment working (manual claim/reassign + single-assignee) with
       append-only assignment history; SSE real-time via `core.realtime`
       (Redis pub/sub transport) with idle-tab backpressure.

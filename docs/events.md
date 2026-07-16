@@ -22,3 +22,15 @@ publisher (`app/core/events.py`); services own their subscribers (later phases).
 
 > Subscribers are **not** built in Phase 1 — only the publisher is. Services add
 > their own producers (`invoice.*`, etc.) and document them here as they land.
+
+## Events produced by Omni-Channel (`source = a2z.omnichannel`)
+
+| event_type | When | Key `detail` fields |
+|---|---|---|
+| `message.received` | An inbound message (any channel) is persisted | `org_id`, `conversation_id`, `message_id`, `channel_type` |
+| `message.sent` | An outbound message is successfully sent through its channel adapter | `org_id`, `conversation_id`, `message_id` |
+
+Published by `app/services/omnichannel/worker.py` as part of the inbound/
+outbound message flow (`app/services/omnichannel/CLAUDE.md` §5.6, Build Order
+Step 5). Both fire *after* the Postgres write commits, never before — the
+database row is the source of truth; the event is a notification of it.

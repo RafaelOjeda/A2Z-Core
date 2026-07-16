@@ -13,16 +13,31 @@ against a real database -- see docs/omnichannel-decisions.md.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.omnichannel import db
+from app.services.omnichannel import db, queues
 from app.services.omnichannel.models import Base
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _fresh_queue_url_cache() -> Iterator[None]:
+    """Reset the cached SQS queue URLs every test.
+
+    ``queues._queue_url_cache`` is a plain module-level dict, not scoped to
+    the ``aws`` (moto) fixture's per-test mock context -- a URL cached while
+    one test's ``mock_aws()`` was active can otherwise leak into the next
+    test's, whose backend state has already been reset (same failure shape
+    as the lru_cache'd engine issue ``_fresh_engine`` below works around).
+    """
+    queues.reset_queue_url_cache()
+    yield
+    queues.reset_queue_url_cache()
 
 
 @pytest.fixture(autouse=True)

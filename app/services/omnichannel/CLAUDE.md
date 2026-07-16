@@ -768,9 +768,28 @@ already allows multiple attributions per invoice), public Inbox API
       dependency. *(Done 2026-07-13 — Build Order Step 3. 12 new unit tests
       under `tests/unit/omnichannel/`, `ruff` + `mypy --strict` clean, full
       suite green — 98 tests, no regressions.)*
-- [ ] WhatsApp adapter implements `ChannelAdapter` (SMS deferred, §15);
-      registry entry added; credentials via `core.secrets`. (Build Order
-      Step 4 — not started.)
+- [x] WhatsApp adapter (`adapters/whatsapp.py`) implements `ChannelAdapter`;
+      registry entry added (SMS still deferred, §15); credentials
+      (`org_id`/`access_token`/`phone_number_id`) arrive via `credentials`,
+      resolved by the caller through `core.secrets` — the adapter itself
+      never calls `core.secrets`. `verify_inbound_signature` checks Meta's
+      `X-Hub-Signature-256` HMAC-SHA256 over the raw body.
+      `omnichannel.whatsapp.send` (80/1s) added to `app/config.py::RATE_LIMITS`
+      per §6.4. Two v1 scope decisions made explicit rather than silent:
+      **outbound is text-only** (no template support yet, and WhatsApp
+      requires an approved template to business-initiate outside the 24h
+      window — templates are deferred, §15); **inbound media is recorded
+      without its bytes** (non-text messages carry only a Graph API media id,
+      and downloading it needs a second credentialed call that
+      `normalize_inbound`'s Protocol signature has no room for — the message
+      still persists with a placeholder body so idempotency and customer
+      visibility hold). *(Done 2026-07-13 — Build Order Step 4. 14 new unit
+      tests under `tests/unit/omnichannel/test_whatsapp_adapter.py`
+      (signature verification incl. case-insensitive headers, multi-message
+      normalization, the media gap, outbound success/validation/HTTP-error
+      wrapping, status-webhook mapping) plus a 2-test registry update;
+      `ruff` + `mypy --strict` clean; full suite green — 112 tests, no
+      regressions.)*
 - [ ] Inbound/outbound flows match §5.6; webhook-retry/duplicate tests pass;
       all rate limits read from `app/config.py::RATE_LIMITS`.
 - [ ] v1 assignment working (manual claim/reassign + single-assignee) with

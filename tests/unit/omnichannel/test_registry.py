@@ -12,6 +12,7 @@ import pytest
 from app.services.omnichannel.adapters.base import ChannelAdapter
 from app.services.omnichannel.adapters.email import EmailAdapter
 from app.services.omnichannel.adapters.registry import get_adapter
+from app.services.omnichannel.adapters.whatsapp import WhatsAppAdapter
 from app.services.omnichannel.exceptions import ChannelAdapterError
 
 
@@ -21,12 +22,19 @@ def test_get_adapter_returns_email_adapter() -> None:
     assert isinstance(adapter, ChannelAdapter)
 
 
+def test_get_adapter_returns_whatsapp_adapter() -> None:
+    adapter = get_adapter("whatsapp")
+    assert isinstance(adapter, WhatsAppAdapter)
+    assert isinstance(adapter, ChannelAdapter)
+
+
 def test_get_adapter_unknown_channel_raises() -> None:
     with pytest.raises(ChannelAdapterError):
         get_adapter("carrier_pigeon")
 
 
-def test_email_adapter_satisfies_protocol_at_runtime() -> None:
+def test_adapters_satisfy_protocol_at_runtime() -> None:
     # runtime_checkable only checks method presence, not signatures -- still
-    # a useful guard that nobody drops a required method off the adapter.
+    # a useful guard that nobody drops a required method off an adapter.
     assert isinstance(EmailAdapter(), ChannelAdapter)
+    assert isinstance(WhatsAppAdapter(), ChannelAdapter)

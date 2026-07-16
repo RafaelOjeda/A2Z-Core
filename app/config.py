@@ -103,6 +103,7 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "email.send": (50, 3600),  # 50 / hour / org
     "ai.parse.user": (30, 60),  # 30 / min / user (future: Invoicing)
     "ai.parse.org": (500, 86400),  # 500 / day / org (future: Invoicing)
+    "omnichannel.whatsapp.send": (80, 1),  # Meta pair-rate ceiling; tune per tier
 }
 
 # Cost note (CLAUDE.md §10): revisit DynamoDB provisioned capacity only if

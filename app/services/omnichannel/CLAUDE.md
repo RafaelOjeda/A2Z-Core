@@ -756,9 +756,21 @@ already allows multiple attributions per invoice), public Inbox API
       under `tests/integration/omnichannel/` cover the idempotency unique
       constraint, the identity unique constraint, FK enforcement, cross-org
       query isolation, and the `channel_type` TEXT invariant.)*
-- [ ] Email/WhatsApp adapters implement `ChannelAdapter` (SMS deferred,
-      §15); each swappable and testable in isolation; email goes through
-      `core.email` only.
+- [x] `ChannelAdapter` Protocol (`adapters/base.py`) + shared types
+      (`adapters/types.py`) + registry (`adapters/registry.py`) built;
+      swappable and testable in isolation. *(Done 2026-07-13 — Build Order
+      Step 3.)*
+- [x] Email adapter (`adapters/email.py`) implements `ChannelAdapter`; sends
+      go through `core.email.send_email` only, never boto3 SES directly.
+      `verify_inbound_signature` is a documented no-op (inbound email has no
+      HTTP webhook to sign — it arrives via SES receipt rule → S3 → SQS,
+      §5.2); `normalize_inbound` parses raw MIME with stdlib `email`, no new
+      dependency. *(Done 2026-07-13 — Build Order Step 3. 12 new unit tests
+      under `tests/unit/omnichannel/`, `ruff` + `mypy --strict` clean, full
+      suite green — 98 tests, no regressions.)*
+- [ ] WhatsApp adapter implements `ChannelAdapter` (SMS deferred, §15);
+      registry entry added; credentials via `core.secrets`. (Build Order
+      Step 4 — not started.)
 - [ ] Inbound/outbound flows match §5.6; webhook-retry/duplicate tests pass;
       all rate limits read from `app/config.py::RATE_LIMITS`.
 - [ ] v1 assignment working (manual claim/reassign + single-assignee) with

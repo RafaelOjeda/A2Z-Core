@@ -829,9 +829,41 @@ already allows multiple attributions per invoice), public Inbox API
       fakeredis — full suite green at 123 (up from 112), `ruff` +
       `mypy --strict` clean. `docs/events.md` gained `message.received` /
       `message.sent`.)*
-- [ ] v1 assignment working (manual claim/reassign + single-assignee) with
-      append-only assignment history; SSE real-time via `core.realtime`
-      (Redis pub/sub transport) with idle-tab backpressure.
+- [x] v1 assignment working (manual claim/reassign + single-assignee) with
+      append-only assignment history. *(Done 2026-07-16 — Build Order Step 6.
+      New `routing.py`: `claim` (Owner/Admin/Agent, not Viewer; idempotent
+      if the caller already owns it; raises `ConversationAlreadyAssignedError`
+      — new, 409 — if it's someone else's, since that's a reassign, a more
+      restricted action), `reassign` (Owner/Admin only, and validates the
+      new assignee is actually an org member), and
+      `apply_single_assignee_if_configured` (the one auto-strategy v1 ships;
+      round-robin/sticky stay deferred, §15). Every path funnels through one
+      internal helper that writes the append-only `ConversationAssignment`
+      row, a `core.audit` entry, and a `core.realtime.publish_update` —
+      §5.4 lists "assignment change" as a live-update trigger, so this also
+      retroactively fills in the "-> notify assignee" step Step 5's worker
+      left as a no-op. Single-assignee config is stored in
+      `core.settings`' free-form `metadata` field under an `"omnichannel"`
+      key — Core's settings schema is fixed and `metadata` is exactly the
+      escape hatch it provides for service-specific config (Design §2.6),
+      so no Core change was needed. Surfaced (and documented, not silently
+      resolved) a real terminology gap: §4's table uses Owner/Admin/Agent/
+      Viewer, but `core.membership.Role` only has OWNER/ADMIN/MEMBER/GUEST
+      — mapped MEMBER -> Agent, GUEST -> Viewer, same convention
+      `handlers.send_reply` already established in Step 5. Three new
+      router endpoints (claim/reassign/routing-config) in
+      `app/routers/omnichannel.py`. 15 new integration tests under
+      `tests/integration/omnichannel/test_routing.py` (claim/reassign authz
+      and idempotency, the already-assigned conflict, single-assignee
+      auto-apply against real Core settings via moto + fakeredis, rejecting
+      unsupported strategies, and a full worker-wiring test confirming the
+      assignee's own realtime channel gets notified) — full suite green at
+      138 (up from 123), `ruff` + `mypy --strict` clean.)*
+- [ ] SSE real-time via `core.realtime` (Redis pub/sub transport) with
+      idle-tab backpressure. (Build Order Step 7 — not started; the
+      `core.realtime.publish_update` calls themselves already exist from
+      Steps 5-6, this is the `GET /omnichannel/stream` relay + browser-side
+      idle/reconnect behavior, §5.4.)
 - [ ] Extensibility invariants hold (§5.2): `channel_type` is `TEXT`, one
       generic webhook route, one shared inbound queue — adding a channel
       touches only `adapters/` + the registry.

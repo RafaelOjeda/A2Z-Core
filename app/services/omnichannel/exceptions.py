@@ -56,3 +56,27 @@ class ConversationNotFoundError(OmniChannelError):
     """Requested conversation does not exist for this org."""
 
     status_code = 404
+
+
+class ForbiddenError(OmniChannelError):
+    """Caller's role can't perform this action (§4).
+
+    Originally defined in ``handlers.py`` for ``send_reply``; moved here in
+    Step 6 once ``routing.py`` needed the same class for claim/reassign/
+    routing-config authz. ``handlers.py`` re-exports it via import so
+    existing ``from app.services.omnichannel.handlers import ForbiddenError``
+    call sites keep working.
+    """
+
+    status_code = 403
+
+
+class ConversationAlreadyAssignedError(OmniChannelError):
+    """A claim was attempted on a conversation already assigned to someone else.
+
+    Not in the original §8 list -- added when building assignment (Step 6):
+    distinguishes "already taken, use reassign instead" from a generic
+    500-level ``RoutingError``.
+    """
+
+    status_code = 409

@@ -17,14 +17,10 @@ from app.core import rate_limit
 from app.core.exceptions import NotFoundError
 from app.core.membership import Role, get_membership
 from app.services.omnichannel import queues
-from app.services.omnichannel.exceptions import ConversationNotFoundError, OmniChannelError
+from app.services.omnichannel.exceptions import ConversationNotFoundError, ForbiddenError
 from app.services.omnichannel.models import ChannelIdentity, Conversation, Message
 
-
-class ForbiddenError(OmniChannelError):
-    """Caller's role can't perform this action (§4)."""
-
-    status_code = 403
+__all__ = ["ForbiddenError", "send_reply"]
 
 
 def _rate_limit_action(channel_type: str) -> str:

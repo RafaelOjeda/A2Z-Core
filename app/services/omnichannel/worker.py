@@ -20,7 +20,7 @@ from app.core.events import publish_event
 from app.core.logging import get_logger
 from app.core.realtime import publish_update
 from app.core.storage import upload_file
-from app.services.omnichannel import queues
+from app.services.omnichannel import queues, routing
 from app.services.omnichannel.adapters.registry import get_adapter
 from app.services.omnichannel.adapters.types import OutboundContent
 from app.services.omnichannel.exceptions import ChannelAdapterError
@@ -64,7 +64,9 @@ async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessa
         identity = await _find_or_create_identity(
             session, org_id, channel_type, item.external_id, item.display_name
         )
-        conversation = await _find_or_create_conversation(session, org_id, identity.id)
+        conversation, conversation_is_new = await _find_or_create_conversation(
+            session, org_id, identity.id
+        )
 
         message = Message(
             org_id=org_id,
@@ -117,9 +119,14 @@ async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessa
         conversation.unread_count += 1
         await session.commit()
 
-        # Routing (single-assignee / round-robin, §5.3) is Step 6 -- v1's
-        # message flow leaves new conversations unassigned here, so there's
-        # no assignee to notify yet either.
+        # Auto-routing only applies to a *brand-new* conversation -- an
+        # existing one may already be claimed/reassigned, and single-assignee
+        # must never override that (§5.3). Round-robin/sticky are deferred
+        # (§15); apply_single_assignee_if_configured no-ops for any org that
+        # hasn't opted into single-assignee via routing.set_routing_config.
+        if conversation_is_new:
+            await routing.apply_single_assignee_if_configured(session, conversation)
+
         await publish_event(
             org_id,
             "message.received",
@@ -139,6 +146,18 @@ async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessa
                 "message_id": message.id,
             },
         )
+        if conversation.assigned_user_id:
+            # Notify the assignee's own channel too (§5.6: "... -> notify
+            # assignee"), on top of the org-wide inbox update above.
+            await publish_update(
+                org_id,
+                f"user:{conversation.assigned_user_id}:notifications",
+                {
+                    "type": "message.received",
+                    "conversation_id": conversation.id,
+                    "message_id": message.id,
+                },
+            )
         log.info(
             "omnichannel.inbound.processed",
             extra={"org_id": org_id, "conversation_id": conversation.id, "message_id": message.id},
@@ -175,7 +194,8 @@ async def _find_or_create_identity(
 
 async def _find_or_create_conversation(
     session: AsyncSession, org_id: str, customer_identity_id: str
-) -> Conversation:
+) -> tuple[Conversation, bool]:
+    """Returns ``(conversation, created)`` -- ``created`` gates auto-routing (§5.3)."""
     # v1: one conversation per channel identity. Cross-channel merge (the
     # same customer's phone + email collapsing into one conversation) needs
     # `channel_identities.customer_id`, which is only ever set by an
@@ -189,7 +209,7 @@ async def _find_or_create_conversation(
     )
     conversation = result.scalar_one_or_none()
     if conversation is not None:
-        return conversation
+        return conversation, False
     conversation = Conversation(
         org_id=org_id,
         customer_identity_id=customer_identity_id,
@@ -198,7 +218,7 @@ async def _find_or_create_conversation(
     )
     session.add(conversation)
     await session.flush()
-    return conversation
+    return conversation, True
 
 
 async def process_outbound_batch(session: AsyncSession, *, max_messages: int = 10) -> int:

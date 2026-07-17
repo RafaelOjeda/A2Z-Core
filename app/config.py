@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     cognito_region: str = Field(default="us-east-1", alias="COGNITO_REGION")
     cognito_app_client_id: str = Field(default="", alias="COGNITO_APP_CLIENT_ID")
 
+    # --- SES SNS notifications (bounce/complaint events; optional for local dev) ---
+    ses_notifications_topic_arn: str | None = Field(
+        default=None, alias="SES_NOTIFICATIONS_TOPIC_ARN"
+    )
+
     # --- Test token signing (HS256). Never used when env == "prod". ---
     test_jwt_secret: str = Field(
         default="local-development-only-not-a-real-secret", alias="TEST_JWT_SECRET"

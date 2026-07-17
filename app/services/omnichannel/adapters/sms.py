@@ -58,14 +58,13 @@ class SmsAdapter:
         self, raw_payload: dict[str, Any]
     ) -> list[NormalizedInboundMessage]:
         """Parse an AWS two-way-SMS inbound-message notification."""
+        from_number = str(raw_payload.get("originationNumber", ""))
         return [
             NormalizedInboundMessage(
+                external_id=from_number,
                 external_message_id=str(raw_payload.get("inboundMessageId", "")),
-                channel_type=ChannelType.SMS,
-                from_identity=str(raw_payload.get("originationNumber", "")),
-                to_identity=str(raw_payload.get("destinationNumber", "")),
                 body_text=raw_payload.get("messageBody"),
-                content_type="text",
+                content_type="text/plain",
             )
         ]
 

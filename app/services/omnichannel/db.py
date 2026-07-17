@@ -9,7 +9,8 @@ own schema on the same instance; there is never a second Postgres instance
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from sqlalchemy.ext.asyncio import (
@@ -35,6 +36,13 @@ def session_factory() -> async_sessionmaker[AsyncSession]:
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency: yields a session, always closed after the request."""
+    async with session_factory()() as session:
+        yield session
+
+
+@asynccontextmanager
+async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
+    """Async context manager for direct use outside FastAPI routes."""
     async with session_factory()() as session:
         yield session
 

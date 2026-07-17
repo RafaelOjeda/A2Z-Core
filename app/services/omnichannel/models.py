@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 
 from sqlalchemy import (
@@ -36,6 +37,25 @@ from sqlalchemy import (
 from sqlalchemy import UniqueConstraint as UQ
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class ChannelType(str, Enum):
+    """Supported communication channels (extensible at runtime via TEXT in schema)."""
+
+    EMAIL = "email"
+    WHATSAPP = "whatsapp"
+    SMS = "sms"
+
+
+class MessageStatus(str, Enum):
+    """Message lifecycle states."""
+
+    RECEIVED = "received"
+    QUEUED = "queued"
+    SENT = "sent"
+    DELIVERED = "delivered"
+    READ = "read"
+    FAILED = "failed"
 
 
 class Base(DeclarativeBase):

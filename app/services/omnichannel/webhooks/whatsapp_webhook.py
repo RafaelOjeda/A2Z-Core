@@ -20,7 +20,6 @@ from app.services.omnichannel.adapters.whatsapp import WhatsAppAdapter
 from app.services.omnichannel.connections import resolve_org_by_provider_account
 from app.services.omnichannel.exceptions import WebhookSignatureError
 from app.services.omnichannel.models import ChannelType
-from app.services.omnichannel.queues import enqueue_inbound
 
 log = get_logger("omnichannel.webhooks.whatsapp")
 

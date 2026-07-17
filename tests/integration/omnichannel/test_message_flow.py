@@ -22,6 +22,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import SQS_MAX_RECEIVE_COUNT
 from app.core import clients
 from app.core.membership import Membership, Role
 from app.services.omnichannel import handlers, queues, webhooks, worker
@@ -365,22 +366,24 @@ async def test_outbound_exhausted_attempts_marks_message_failed(
 
     # Fabricate a message that's already been redelivered to its max --
     # exercising this without waiting out five real SQS visibility timeouts.
-    # `process_outbound_batch` (not `_process_outbound_message` directly) is
-    # what decides to delete on exhaustion, so drive it through that entry
-    # point with `receive_outbound` stubbed to hand back the fabricated message.
     fake_msg = queues.QueueMessage(
         body={"message_id": message.id},
         attributes={"org_id": connection.org_id},
         receipt_handle="fake-receipt",
-        receive_count=5,
+        receive_count=SQS_MAX_RECEIVE_COUNT,
     )
     monkeypatch.setattr(queues, "receive_outbound", AsyncMock(return_value=[fake_msg]))
     mock_delete = AsyncMock()
     monkeypatch.setattr(queues, "delete_outbound", mock_delete)
 
     processed = await worker.process_outbound_batch(session)
-    assert processed == 1
-    mock_delete.assert_called_once_with("fake-receipt")
+
+    # Marked failed for the UI, but deliberately NOT deleted: deleting an
+    # exhausted send would retire it before SQS's redrive policy could move it
+    # to the DLQ, leaving the §11 "DLQ depth > 0" alarm permanently unarmed.
+    # SQS itself is what retires the message, onto the DLQ.
+    assert processed == 0
+    mock_delete.assert_not_called()
 
     await session.refresh(message)
     assert message.status == "failed"

@@ -54,8 +54,15 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
-      - name: unit + integration (coverage gate 90%)
-        run: pytest -m "not load" --cov=app/core --cov-report=term-missing --cov-fail-under=90 -q
+      - name: unit + integration
+        run: pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov-report=term-missing -q
+      # Gated per package rather than on one combined total: each carries its
+      # own >=90% bar, and a combined number would let a dip in one hide
+      # behind the other. Both read the same coverage data from the run above.
+      - name: coverage gate -- app/core >= 90%
+        run: coverage report --include="app/core/*" --fail-under=90
+      - name: coverage gate -- app/services/omnichannel >= 90%
+        run: coverage report --include="app/services/omnichannel/*" --fail-under=90
       - name: load / latency targets (Design §5.4)
         # Latency assertions are jittery on shared runners; advisory for now.
         continue-on-error: true

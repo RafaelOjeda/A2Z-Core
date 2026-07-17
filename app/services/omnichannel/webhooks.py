@@ -10,13 +10,14 @@ the shared inbound SQS queue. Adding a channel touches no code here -- only
 from __future__ import annotations
 
 import json
+import time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import secrets
 from app.core.logging import get_logger
-from app.services.omnichannel import queues
+from app.services.omnichannel import metrics, queues
 from app.services.omnichannel.adapters.registry import get_adapter
 from app.services.omnichannel.exceptions import ConnectionNotFoundError, WebhookSignatureError
 from app.services.omnichannel.models import ChannelConnection
@@ -50,8 +51,10 @@ async def handle_webhook(
         WebhookSignatureError: The signature didn't verify.
 
     Performance target: < 2s p99 -- ack fast, do the real work in the worker
-    (§5.6; Meta's retry window is ~10s).
+    (§5.6; Meta's retry window is ~10s). Emits ``WebhookAckLatencyMs``, the
+    series that target is alarmed on (§11).
     """
+    started = time.perf_counter()
     connection = await _load_connection(session, connection_id)
     if connection.channel_type != channel_type:
         raise ConnectionNotFoundError(
@@ -75,6 +78,10 @@ async def handle_webhook(
         connection_id=connection.id,
         raw_payload=raw_payload,
     )
+    # Measured over the accepted path only. A rejected webhook (bad signature /
+    # unknown connection) is an auth outcome, not an ack -- folding those into
+    # the latency series would let a burst of cheap 401s mask a real p99 breach.
+    metrics.record_webhook_ack_latency(channel_type, (time.perf_counter() - started) * 1000)
     log.info(
         "omnichannel.webhook.accepted",
         extra={

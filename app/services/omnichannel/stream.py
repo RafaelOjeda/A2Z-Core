@@ -24,6 +24,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 from app.core import clients
 from app.core.logging import get_logger
+from app.services.omnichannel import metrics
 
 log = get_logger("omnichannel.stream")
 
@@ -101,6 +102,7 @@ async def stream_events(
     pubsub = redis.pubsub()
     await pubsub.subscribe(*channels)
     started = clock()
+    metrics.record_stream_delta(1)
     log.info("omnichannel.stream.opened", extra={"org_id": org_id, "user_id": user_id})
     try:
         yield _frame_comment("connected")
@@ -128,4 +130,7 @@ async def stream_events(
             await pubsub.aclose()  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 -- teardown must not raise
             log.info("omnichannel.stream.teardown_error", extra={"org_id": org_id})
+        # Paired with the +1 above so the CloudWatch SUM tracks live streams;
+        # in the finally block so a cancelled/errored stream still decrements.
+        metrics.record_stream_delta(-1)
         log.info("omnichannel.stream.closed", extra={"org_id": org_id, "user_id": user_id})

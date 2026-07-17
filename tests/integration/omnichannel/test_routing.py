@@ -47,11 +47,26 @@ def _stub_membership(monkeypatch: pytest.MonkeyPatch, role: Role, org_id: str = 
 
 
 def _mock_audit_and_realtime(monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:
+    """Mock the Core fan-out calls _record_assignment makes (audit/event/realtime).
+
+    Returns the audit + realtime mocks; see ``_mock_core_calls`` when a test
+    needs the ``publish_event`` mock too.
+    """
+    mock_audit, mock_event, mock_realtime = _mock_core_calls(monkeypatch)
+    return mock_audit, mock_realtime
+
+
+def _mock_core_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[AsyncMock, AsyncMock, AsyncMock]:
+    """Mock log_audit / publish_event / publish_update at routing's import site."""
     mock_audit = AsyncMock()
+    mock_event = AsyncMock()
     mock_realtime = AsyncMock()
     monkeypatch.setattr(routing, "log_audit", mock_audit)
+    monkeypatch.setattr(routing, "publish_event", mock_event)
     monkeypatch.setattr(routing, "publish_update", mock_realtime)
-    return mock_audit, mock_realtime
+    return mock_audit, mock_event, mock_realtime
 
 
 async def _seed_conversation(session: AsyncSession, org_id: str = "org-a") -> Conversation:
@@ -71,7 +86,7 @@ async def test_claim_assigns_and_records_history(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_membership(monkeypatch, Role.MEMBER)
-    mock_audit, mock_realtime = _mock_audit_and_realtime(monkeypatch)
+    mock_audit, mock_event, mock_realtime = _mock_core_calls(monkeypatch)
     conversation = await _seed_conversation(session)
 
     result = await routing.claim(session, "org-a", conversation.id, "agent-1")
@@ -83,7 +98,31 @@ async def test_claim_assigns_and_records_history(
     assert rows[0].assigned_by == "agent-1"
     assert rows[0].reason == "claim"
     mock_audit.assert_called_once()
-    mock_realtime.assert_called_once()
+
+    # Fans out to both the org-wide inbox and the assignee's own channel (§5.4).
+    assert mock_realtime.await_count == 2
+    channels = [call.args[1] for call in mock_realtime.await_args_list]
+    assert channels == ["org:org-a:conversations", "user:agent-1:notifications"]
+
+
+async def test_claim_publishes_conversation_assigned_event(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§6.1 lists conversation.assigned among this service's published events."""
+    _stub_membership(monkeypatch, Role.MEMBER)
+    _, mock_event, _ = _mock_core_calls(monkeypatch)
+    conversation = await _seed_conversation(session)
+
+    await routing.claim(session, "org-a", conversation.id, "agent-1")
+
+    mock_event.assert_awaited_once()
+    args, kwargs = mock_event.await_args
+    assert args[0] == "org-a"
+    assert args[1] == "conversation.assigned"
+    assert args[2]["conversation_id"] == conversation.id
+    assert args[2]["assigned_user_id"] == "agent-1"
+    assert args[2]["reason"] == "claim"
+    assert kwargs["source"] == "a2z.omnichannel"
 
 
 async def test_claim_idempotent_for_same_user(
@@ -161,7 +200,9 @@ async def test_reassign_by_admin_succeeds(
     assert rows[-1].assigned_by == "admin-1"
     assert rows[-1].reason == "reassign"
     assert mock_audit.call_count == 2
-    assert mock_realtime.call_count == 2
+    # 2 assignments x 2 channels each (org inbox + the new assignee's own).
+    assert mock_realtime.call_count == 4
+    assert mock_realtime.call_args.args[1] == "user:agent-2:notifications"
 
 
 async def test_reassign_by_member_forbidden(

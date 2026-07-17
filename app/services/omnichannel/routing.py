@@ -20,15 +20,18 @@ Agent, GUEST -> Viewer.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
+from app.core.events import publish_event
 from app.core.exceptions import NotFoundError
 from app.core.membership import Role, get_membership
 from app.core.realtime import publish_update
 from app.core.settings import get_org_settings, set_org_settings
+from app.services.omnichannel import metrics
 from app.services.omnichannel.exceptions import (
     ConversationAlreadyAssignedError,
     ConversationNotFoundError,
@@ -57,11 +60,12 @@ async def _record_assignment(
     assigned_by: str,
     reason: str,
 ) -> None:
-    """Write the assignment + its append-only history row + audit + realtime update.
+    """Write the assignment + history row + audit + domain event + realtime update.
 
     Shared by every assignment path (claim, reassign, single-assignee
     auto-apply) so the history is uniform no matter who/what triggered it.
     """
+    started = time.perf_counter()
     conversation.assigned_user_id = assigned_user_id
     session.add(
         ConversationAssignment(
@@ -81,6 +85,20 @@ async def _record_assignment(
         conversation.id,
         {"assigned_user_id": assigned_user_id, "reason": reason},
     )
+    # The cross-service contract (§6.1 lists conversation.assigned among the
+    # events this service publishes). Distinct from the realtime update below:
+    # this is EventBridge, for other services; that one is the UI push.
+    await publish_event(
+        conversation.org_id,
+        "conversation.assigned",
+        {
+            "conversation_id": conversation.id,
+            "assigned_user_id": assigned_user_id,
+            "assigned_by": assigned_by,
+            "reason": reason,
+        },
+        source="a2z.omnichannel",
+    )
     await publish_update(
         conversation.org_id,
         f"org:{conversation.org_id}:conversations",
@@ -90,6 +108,16 @@ async def _record_assignment(
             "assigned_user_id": assigned_user_id,
         },
     )
+    await publish_update(
+        conversation.org_id,
+        f"user:{assigned_user_id}:notifications",
+        {
+            "type": "conversation.assigned",
+            "conversation_id": conversation.id,
+            "assigned_user_id": assigned_user_id,
+        },
+    )
+    metrics.record_routing_latency((time.perf_counter() - started) * 1000)
 
 
 async def claim(

@@ -28,6 +28,7 @@ from botocore.config import Config as BotoConfig
 from app.config import settings
 
 if TYPE_CHECKING:  # import only for type checkers; avoids runtime cost
+    from mypy_boto3_cloudwatch import CloudWatchClient
     from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_events import EventBridgeClient
     from mypy_boto3_s3 import S3Client
@@ -87,6 +88,14 @@ def secretsmanager() -> SecretsManagerClient:
 
 
 @lru_cache(maxsize=1)
+def cloudwatch() -> CloudWatchClient:
+    # Custom service metrics (Omni-Channel's A2Z/OmniChannel namespace,
+    # app/services/omnichannel/CLAUDE.md §11). Structured logs still go via
+    # core.logging; this is only for the numeric metrics alarms watch.
+    return cast("CloudWatchClient", _client("cloudwatch"))
+
+
+@lru_cache(maxsize=1)
 def sqs() -> SQSClient:
     # Service-owned queueing (Omni-Channel's shared inbound/outbound queues,
     # app/services/omnichannel/CLAUDE.md §5.6/§12) -- lives here per this
@@ -107,7 +116,17 @@ async def run_aws[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 
 def reset_clients() -> None:
     """Clear cached clients. Used by tests after pointing at a fresh backend."""
-    for factory in (dynamodb, s3, ses, sns, eventbridge, secretsmanager, sqs, redis_client):
+    for factory in (
+        dynamodb,
+        s3,
+        ses,
+        sns,
+        eventbridge,
+        secretsmanager,
+        sqs,
+        cloudwatch,
+        redis_client,
+    ):
         # redis_client may be monkeypatched in tests (no lru_cache wrapper).
         clear = getattr(factory, "cache_clear", None)
         if clear is not None:

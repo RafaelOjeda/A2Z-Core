@@ -22,11 +22,11 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
-    "moto[dynamodb,s3,ses,sns,events,secretsmanager,sqs]>=5.0",
+    "moto[dynamodb,s3,ses,sns,events,secretsmanager,sqs,cloudwatch]>=5.0",
     "fakeredis>=2.21",
     "ruff>=0.4",
     "mypy>=1.9",
-    "boto3-stubs[dynamodb,s3,ses,sns,events,secretsmanager,sqs]>=1.34",
+    "boto3-stubs[dynamodb,s3,ses,sns,events,secretsmanager,sqs,cloudwatch]>=1.34",
     "types-redis>=4.6",
 ]
 
@@ -72,5 +72,8 @@ markers = [
 addopts = "-ra"
 
 [tool.coverage.run]
-source = ["app/core"]
+# Both packages carry their own >=90% bar (root CLAUDE.md §15 for core;
+# app/services/omnichannel/CLAUDE.md §16 for the service). CI reports them
+# separately from one run so a dip in either can't be masked by the other.
+source = ["app/core", "app/services/omnichannel"]
 branch = true

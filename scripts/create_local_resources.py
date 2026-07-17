@@ -24,7 +24,7 @@ from app.aws_resources import (
     s3_bucket_name,
     table_definitions,
 )
-from app.config import settings
+from app.config import SQS_MAX_RECEIVE_COUNT, settings
 from app.core import clients
 from app.core.logging import get_logger
 
@@ -95,15 +95,19 @@ def create_event_bus() -> None:
 def _create_queue(name: str, *, redrive_target_arn: str | None = None) -> str:
     """Create (or reuse) one SQS queue; returns its ARN.
 
-    ``redrive_target_arn`` wires a redrive policy to a DLQ (maxReceiveCount=5,
-    Omni-Channel CLAUDE.md §5.6: "bounded retry with backoff, then DLQ +
-    alarm" — the alarm side is infra/Step 8, this is the queue-level plumbing).
+    ``redrive_target_arn`` wires a redrive policy to a DLQ (Omni-Channel
+    CLAUDE.md §5.6: "bounded retry with backoff, then DLQ + alarm"). The
+    threshold comes from ``config.SQS_MAX_RECEIVE_COUNT`` so it can't drift
+    from the worker's give-up threshold.
     """
     sqs = clients.sqs()
     attributes: dict[QueueAttributeNameType, str] = {}
     if redrive_target_arn:
         attributes["RedrivePolicy"] = json.dumps(
-            {"deadLetterTargetArn": redrive_target_arn, "maxReceiveCount": 5}
+            {
+                "deadLetterTargetArn": redrive_target_arn,
+                "maxReceiveCount": SQS_MAX_RECEIVE_COUNT,
+            }
         )
     try:
         resp = sqs.create_queue(QueueName=name, Attributes=attributes)

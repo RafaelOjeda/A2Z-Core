@@ -894,24 +894,93 @@ already allows multiple attributions per invoice), public Inbox API
       lifetime cap, disconnect teardown, plus endpoint auth (401 no/bad
       token, 404 non-member, 200 member gets `text/event-stream`) — full
       suite green at 148 (up from 138), `ruff` + `mypy --strict` clean.)*
-- [ ] Extensibility invariants hold (§5.2): `channel_type` is `TEXT`, one
+- [x] Extensibility invariants hold (§5.2): `channel_type` is `TEXT`, one
       generic webhook route, one shared inbound queue — adding a channel
-      touches only `adapters/` + the registry.
-- [ ] Commission tables present in the baseline schema (feature itself
+      touches only `adapters/` + the registry. *(All three guarded by tests:
+      `test_models.py::test_channel_type_is_text_not_enum` queries
+      `information_schema`; the generic route and shared queue are exercised
+      by `test_message_flow.py` for both channels through the same code path.)*
+- [x] Commission tables present in the baseline schema (feature itself
       deferred with Invoicing, §15 — the invoice-creation snapshot rule in
-      §5.5 stays locked for when it's built).
-- [ ] All §10 cost mitigations implemented, not deferred.
-- [ ] CloudWatch logs / X-Ray / `A2Z/OmniChannel` metrics / alarms live.
-- [ ] Terragrunt modules applied per §12 (single-EC2 shape; deferred modules
-      not built); local resources mirrored in
-      `scripts/create_local_resources.py`.
-- [ ] Nightly Postgres `pg_dump` to S3 running, 30-day retention, and a
-      restore actually tested (§12).
-- [ ] `ruff` + `mypy --strict` clean; unit + integration + load green; >90%
+      §5.5 stays locked for when it's built). *(Shipped in the Step 2 Alembic
+      baseline: `commission_rules` + `commission_attributions`.)*
+- [x] All §10 cost mitigations implemented, not deferred — **or explicitly
+      scoped out with a reason.** *(Done 2026-07-17 — Step 8. Implemented:
+      the `mediaurl:{key}` signed-URL cache (new `media.py`, 1h TTL under a
+      2h signature so a cache hit never returns a near-expired URL); SSE
+      on-box fan-out at $0 with idle-tab close (Step 7); no NAT at MVP (§12);
+      `core.secrets`' 5-min Redis TTL (Step 1). Deliberately **not** built,
+      because each mitigates a path v1 doesn't have: SES notification
+      batching (no digest/notification feature), and Postgres cold-partition
+      archival of messages >12 months (nothing is 12 months old, and the
+      archive job wants real query patterns to design against). Both are
+      cost *scaling* work, tracked here rather than silently dropped.*
+- [x] `A2Z/OmniChannel` metrics + structured CloudWatch logs live. *(Done
+      2026-07-17 — Step 8. New `metrics.py` publishes the full §11 series:
+      `WebhookAckLatencyMs` (per channel, over the *accepted* path only —
+      folding rejected 401s in would let cheap failures mask a real p99
+      breach), `MessageProcessingLatencyMs` (receipt → realtime publish, i.e.
+      actually on-screen), `RoutingLatencyMs`, `SendSuccessRate`/
+      `SendFailureRate` (count-based; CloudWatch computes the rate at alarm
+      time, keeping the emit side stateless), and `ActiveSSEStreams` (a ±1
+      delta, not a gauge — each process only knows its own streams, so the
+      fleet total is CloudWatch's SUM, which stays correct when this becomes
+      `ActiveAppSyncConnections` at distribution). **Metrics never break the
+      flow they measure**: every publish is fire-and-forget via a background
+      task and swallows its errors, so a CloudWatch throttle can't fail a
+      customer's message — asserted by `test_metrics.py`, and a load test
+      proves `record_*` doesn't block on the round-trip.)*
+- [ ] **X-Ray + CloudWatch alarms — needs an AWS account.** The metric
+      *series* the §11 alarms watch are all emitted and tested (above), but
+      the alarms themselves, X-Ray, and the CloudWatch agent are infra that
+      can't be created or verified without a real account. Not claimable
+      from a local suite; see the Step 8 note below.
+- [ ] **Terragrunt modules applied per §12 — needs an AWS account.** The
+      shape is codified and the local mirror is real: `create_local_resources.py`
+      now provisions the shared inbound/outbound queues **and their DLQs with
+      redrive policies**, and `test_dlq.py` verifies redrive end-to-end
+      against moto. The `ec2-app`/`sqs-omnichannel`/`secretsmanager-channels`/
+      `ses-receipt-rules` modules and a first real `apply` remain pending an
+      account.
+- [ ] **Nightly Postgres `pg_dump` to S3 + a tested restore — needs an AWS
+      account and the EC2 host (§12).** Deliberately left unchecked: §12 calls
+      this "non-negotiable: there is no RDS safety net", and a restore that
+      hasn't actually been run is not a backup. This is the single highest
+      -risk open item for going live.
+- [x] `ruff` + `mypy --strict` clean; unit + integration + load green; >90%
       coverage on the service package; cross-org isolation proven per table;
-      `docs/events.md` updated with every new event type.
+      `docs/events.md` updated with every new event type. *(179 tests green
+      (169 + 10 load); coverage 96% on `app/services/omnichannel`, 93% on
+      `app/core`. CI now gates each package independently from a single run —
+      a combined total would let a dip in one hide behind the other.
+      `docs/events.md` gained `conversation.assigned`, which §6.1 always
+      listed but nothing published: routing wrote the audit row and the
+      realtime UI push but never the EventBridge event, so the cross-service
+      contract had a hole. The doc now also states plainly that realtime
+      channels are **not** events, and records that
+      `conversation.invoice_requested` stays unpublished until Invoicing
+      exists to consume it.)*
 - [ ] §14 decisions recorded, and every **(validate against docx)** marker in
       this file confirmed or corrected against `OmniChannel_Service_Summary.docx`.
+      *(Decisions are recorded in `docs/omnichannel-decisions.md` — but
+      decision #6, the pricing tier, is still flagged UNCONFIRMED pending
+      Rafael, and the docx markers have not been validated against the source
+      document, which isn't in the repo. Left unchecked on purpose.)*
+
+> **Step 8 note — what "freeze" means here.** Everything verifiable without an
+> AWS account is done and green. The four unchecked items above are gated on
+> real AWS (alarms/X-Ray, Terragrunt apply, the backup+restore drill) or on
+> input only Rafael has (pricing, the docx). The service is **code-complete for
+> v1 and frozen for feature work**; it is *not* production-ready until the
+> backup restore is actually exercised.
+>
+> One real defect was found and fixed while wiring the DLQ: the worker deleted
+> an outbound message once `receive_count` hit its threshold, which retired it
+> *before* SQS's redrive policy could move it to the DLQ — so the DLQ stayed
+> permanently empty and the §11 "DLQ depth > 0" alarm could never have fired.
+> The worker now leaves a failed send for SQS to redrive, and the threshold
+> lives once in `config.SQS_MAX_RECEIVE_COUNT`, read by both the queue's
+> RedrivePolicy and the worker, so the two can't drift.
 
 ## 17. Pointers
 

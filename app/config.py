@@ -123,3 +123,12 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
 # Cost note (CLAUDE.md §10): revisit DynamoDB provisioned capacity only if
 # monthly spend crosses ~$100. On-demand is the MVP default everywhere.
 DDB_BILLING_MODE = "PAY_PER_REQUEST"
+
+# SQS redrive threshold: a message received more than this many times is moved
+# to its DLQ by SQS ("bounded retry with backoff, then DLQ + alarm" --
+# app/services/omnichannel/CLAUDE.md §5.6). Single source of truth on purpose:
+# the queue's RedrivePolicy (scripts/create_local_resources.py) and the
+# worker's give-up threshold must agree, or the worker would either retire
+# messages before the DLQ ever sees them (silently emptying the §11 DLQ-depth
+# alarm) or mark them failed while SQS keeps redelivering.
+SQS_MAX_RECEIVE_COUNT = 5

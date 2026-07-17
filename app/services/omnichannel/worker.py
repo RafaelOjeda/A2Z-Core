@@ -8,6 +8,7 @@ tests call it directly without a long-running process.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,12 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import SQS_MAX_RECEIVE_COUNT
 from app.core import secrets
 from app.core.events import publish_event
 from app.core.logging import get_logger
 from app.core.realtime import publish_update
 from app.core.storage import upload_file
-from app.services.omnichannel import queues, routing
+from app.services.omnichannel import metrics, queues, routing
 from app.services.omnichannel.adapters.registry import get_adapter
 from app.services.omnichannel.adapters.types import OutboundContent
 from app.services.omnichannel.exceptions import ChannelAdapterError
@@ -35,9 +37,12 @@ from app.services.omnichannel.models import (
 log = get_logger("omnichannel.worker")
 
 # Bounded retry, then let it fall to the DLQ (§5.6) -- never blind infinite
-# retry (WhatsApp sends cost real money per attempt). Alarming on DLQ depth
-# is infra, Step 8.
-_OUTBOUND_MAX_ATTEMPTS = 5
+# retry (WhatsApp sends cost real money per attempt). This is the *same*
+# threshold as the queue's RedrivePolicy (config.SQS_MAX_RECEIVE_COUNT), read
+# from one place on purpose: at this receive count we mark the message failed
+# in Postgres so the UI reflects it, and SQS redrives the message itself to
+# the DLQ. Two independent constants would drift and desync those two facts.
+_OUTBOUND_MAX_ATTEMPTS = SQS_MAX_RECEIVE_COUNT
 
 
 async def process_inbound_batch(session: AsyncSession, *, max_messages: int = 10) -> int:
@@ -55,6 +60,7 @@ async def process_inbound_batch(session: AsyncSession, *, max_messages: int = 10
 
 
 async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessage) -> None:
+    started = time.perf_counter()
     org_id = msg.attributes["org_id"]
     channel_type = msg.attributes["channel_type"]
     adapter = get_adapter(channel_type)
@@ -158,6 +164,11 @@ async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessa
                     "message_id": message.id,
                 },
             )
+        # "Receipt -> visible in inbox" (§11): the realtime publish above is
+        # the moment it lands on an agent's screen, so the span ends here.
+        metrics.record_message_processing_latency(
+            channel_type, (time.perf_counter() - started) * 1000
+        )
         log.info(
             "omnichannel.inbound.processed",
             extra={"org_id": org_id, "conversation_id": conversation.id, "message_id": message.id},
@@ -225,25 +236,34 @@ async def process_outbound_batch(session: AsyncSession, *, max_messages: int = 1
     """Drain up to ``max_messages`` queued outbound sends.
 
     Returns:
-        The number of SQS messages resolved (sent, or dropped as
-        unrecoverable/exhausted) -- not just successful sends.
+        The number of SQS messages deleted from the queue -- i.e. sent, or
+        unrecoverable (no such message/context, so retrying can't help).
+        A *failed send* is deliberately not counted or deleted; see below.
     """
     messages = await queues.receive_outbound(max_messages=max_messages)
     processed = 0
     for msg in messages:
-        sent = await _process_outbound_message(session, msg)
-        if sent or msg.receive_count >= _OUTBOUND_MAX_ATTEMPTS:
+        resolved = await _process_outbound_message(session, msg)
+        if resolved:
             await queues.delete_outbound(msg.receipt_handle)
             processed += 1
-        # else: leave it in the queue -- SQS's visibility timeout drives the
-        # retry/backoff; once maxReceiveCount is hit, the redrive policy
-        # (scripts/create_local_resources.py; real infra at distribution)
-        # moves it to the DLQ automatically.
+        # else: leave it in the queue. SQS's visibility timeout drives the
+        # retry/backoff, and once the message has been received more than
+        # config.SQS_MAX_RECEIVE_COUNT times the redrive policy moves it to
+        # the DLQ -- which is what the §11 "DLQ depth > 0" alarm watches.
+        # Deleting an exhausted send here instead would retire it ourselves
+        # and leave the DLQ permanently empty, silently disarming that alarm.
     return processed
 
 
 async def _process_outbound_message(session: AsyncSession, msg: queues.QueueMessage) -> bool:
-    """Send one queued outbound message. Returns True iff it's safe to delete."""
+    """Send one queued outbound message.
+
+    Returns:
+        True iff the message is resolved and safe to delete from the queue --
+        either sent, or unrecoverable so that retrying cannot help. False on a
+        failed send, leaving SQS to retry and ultimately redrive it to the DLQ.
+    """
     message_id = msg.body["message_id"]
     message = await session.get(Message, message_id)
     if message is None:
@@ -274,6 +294,7 @@ async def _process_outbound_message(session: AsyncSession, msg: queues.QueueMess
             identity.external_id, OutboundContent(body_text=message.body_text), credentials
         )
     except ChannelAdapterError:
+        metrics.record_send_result(message.channel_type, success=False)
         log.error(
             "omnichannel.outbound.send_failed",
             extra={
@@ -290,6 +311,7 @@ async def _process_outbound_message(session: AsyncSession, msg: queues.QueueMess
     message.external_message_id = result.external_message_id
     message.status = "sent"
     await session.commit()
+    metrics.record_send_result(message.channel_type, success=True)
 
     await publish_event(
         message.org_id,

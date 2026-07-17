@@ -45,6 +45,7 @@ async def heartbeat(org_id: str, user_id: str, status: str = "online") -> None:
             set_={"status": stmt.excluded.status, "updated_at": stmt.excluded.updated_at},
         )
         await session.execute(stmt)
+        await session.commit()
 
 
 async def get_status(org_id: str, user_id: str) -> str:

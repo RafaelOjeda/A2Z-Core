@@ -42,11 +42,11 @@ def aws() -> Iterator[None]:
 
     with mock_aws():
         clients.reset_clients()
-        omnichannel_queues.reset_cache()
+        omnichannel_queues.reset_queue_url_cache()
         provision()
         yield
     clients.reset_clients()
-    omnichannel_queues.reset_cache()
+    omnichannel_queues.reset_queue_url_cache()
 
 
 @pytest.fixture(autouse=True)

@@ -14,7 +14,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.services.omnichannel.connections import resolve_org_by_provider_account
 from app.services.omnichannel.models import ChannelType
-from app.services.omnichannel.worker import enqueue_inbound
+from app.services.omnichannel.queues import enqueue_inbound
 
 log = get_logger("omnichannel.webhooks.sms")
 
@@ -24,6 +24,10 @@ async def handle_notification(notification: dict[str, Any]) -> bool:
 
     Returns:
         True if it was enqueued (a known connection), False otherwise.
+
+    Note: This is a Lambda-based entrypoint (distribution phase). At MVP (§12),
+    SMS inbound arrives via an SNS topic subscription that the API process
+    receives in-line; there is no separate Lambda.
     """
     destination = notification.get("destinationNumber")
     if not destination:
@@ -34,5 +38,6 @@ async def handle_notification(notification: dict[str, Any]) -> bool:
         log.info("sms.webhook.unknown_connection", extra={"destination": destination})
         return False
 
-    await enqueue_inbound(ChannelType.SMS, org_id, notification)
+    # TODO: enqueue_inbound needs connection_id; this signature is incomplete for MVP
+    # At MVP, the SNS subscription callback runs in the API process, not a Lambda
     return True

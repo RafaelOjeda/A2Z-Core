@@ -19,7 +19,7 @@ async def resolve_org_by_provider_account(
     channel_type: ChannelType, provider_account_id: str
 ) -> str | None:
     """Return the org_id owning this provider account, or None if unknown."""
-    async with db.get_session() as session:
+    async with db.get_session_context() as session:
         result = await session.execute(
             select(ChannelConnection.org_id).where(
                 ChannelConnection.channel_type == channel_type.value,

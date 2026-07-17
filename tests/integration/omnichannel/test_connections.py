@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 
 async def test_resolves_known_provider_account() -> None:
-    async with db.get_session() as session:
+    async with db.get_session_context() as session:
         session.add(
             ChannelConnection(
                 org_id="org-a",
@@ -23,6 +23,7 @@ async def test_resolves_known_provider_account() -> None:
                 credentials_secret_key="whatsapp_token",
             )
         )
+        await session.commit()
 
     org_id = await resolve_org_by_provider_account(ChannelType.WHATSAPP, "pn-123")
     assert org_id == "org-a"
@@ -34,7 +35,7 @@ async def test_returns_none_for_unknown_provider_account() -> None:
 
 
 async def test_scoped_by_channel_type_not_just_provider_account_id() -> None:
-    async with db.get_session() as session:
+    async with db.get_session_context() as session:
         session.add(
             ChannelConnection(
                 org_id="org-a",
@@ -44,6 +45,7 @@ async def test_scoped_by_channel_type_not_just_provider_account_id() -> None:
                 credentials_secret_key="sms_key",
             )
         )
+        await session.commit()
 
     # Same provider_account_id string, different channel_type -> no match.
     assert await resolve_org_by_provider_account(ChannelType.WHATSAPP, "shared-id") is None

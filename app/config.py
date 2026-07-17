@@ -76,7 +76,6 @@ class Settings(BaseSettings):
     cognito_region: str = Field(default="us-east-1", alias="COGNITO_REGION")
     cognito_app_client_id: str = Field(default="", alias="COGNITO_APP_CLIENT_ID")
 
-<<<<<<< HEAD
     # --- SES SNS notifications (bounce/complaint events; optional for local dev) ---
     ses_notifications_topic_arn: str | None = Field(
         default=None, alias="SES_NOTIFICATIONS_TOPIC_ARN"

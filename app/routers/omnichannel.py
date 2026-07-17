@@ -10,11 +10,14 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import auth, membership
+from app.core.exceptions import NotFoundError
 from app.dependencies import CurrentUser
-from app.services.omnichannel import handlers, routing
+from app.services.omnichannel import handlers, routing, stream
 from app.services.omnichannel.db import get_session
 from app.services.omnichannel.webhooks import handle_webhook
 
@@ -115,4 +118,41 @@ async def set_routing_config(
     """Owner/Admin sets the org's routing strategy (§5.3, §4)."""
     return await routing.set_routing_config(
         org_id, user["sub"], body.strategy, body.single_assignee_user_id
+    )
+
+
+@router.get("/orgs/{org_id}/stream")
+async def stream_inbox(
+    org_id: str,
+    request: Request,
+    access_token: str | None = None,
+) -> StreamingResponse:
+    """Live inbox updates over Server-Sent Events (§5.4).
+
+    Auth is handled inline rather than via the shared ``CurrentUser``
+    dependency because a browser ``EventSource`` cannot set an
+    ``Authorization`` header -- so the token may arrive as the
+    ``access_token`` query param instead, with the header still accepted as
+    a fallback (e.g. curl / a proxied client). Membership is re-checked here
+    on every (re)connect, so a revoked member's stream ends on their next
+    reconnect (§5.4).
+    """
+    token = access_token
+    if token is None:
+        header = request.headers.get("authorization") or request.headers.get("Authorization")
+        if header and header.lower().startswith("bearer "):
+            token = header.split(" ", 1)[1].strip()
+    claims = auth.validate_jwt(token or "")
+    user_id = claims["sub"]
+
+    if await membership.get_membership(user_id, org_id) is None:
+        raise NotFoundError("Not a member of this org")
+
+    return StreamingResponse(
+        stream.stream_events(org_id, user_id, is_disconnected=request.is_disconnected),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable proxy buffering so events flush immediately
+        },
     )

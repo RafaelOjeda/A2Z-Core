@@ -859,11 +859,41 @@ already allows multiple attributions per invoice), public Inbox API
       unsupported strategies, and a full worker-wiring test confirming the
       assignee's own realtime channel gets notified) — full suite green at
       138 (up from 123), `ruff` + `mypy --strict` clean.)*
-- [ ] SSE real-time via `core.realtime` (Redis pub/sub transport) with
-      idle-tab backpressure. (Build Order Step 7 — not started; the
-      `core.realtime.publish_update` calls themselves already exist from
-      Steps 5-6, this is the `GET /omnichannel/stream` relay + browser-side
-      idle/reconnect behavior, §5.4.)
+- [x] SSE real-time via `core.realtime` (Redis pub/sub transport) with
+      idle-tab backpressure. *(Done 2026-07-17 — Build Order Step 7. New
+      `stream.py` is the browser-facing subscribe/relay half of §5.4:
+      `stream_events` subscribes (via `core.clients.redis_client().pubsub()`)
+      to the agent's two channels — `org:{org_id}:conversations` and
+      `user:{user_id}:notifications` — and yields SSE frames, relaying each
+      `core.realtime.publish_update` as a `data:` event with `: keepalive`
+      comments on every idle heartbeat tick. New `GET
+      /omnichannel/orgs/{org_id}/stream` endpoint in the router returns a
+      `StreamingResponse(media_type="text/event-stream")`. Deliberate
+      design choices, each documented inline: (1) the relay is **service-
+      owned, not Core** — the plan says "Core's job stops at the publish,"
+      and at the AppSync distribution phase this relay disappears entirely
+      (browsers subscribe to AppSync directly), so it's MVP-only glue and
+      adding a `subscribe` to Core would be churn for something thrown away.
+      (2) The one Core coupling — the `rt:{channel}` key convention that
+      `core.realtime` owns — is duplicated in `stream._channel_key` rather
+      than exported from Core (avoids a Core change), and locked by a
+      round-trip test (`test_publish_roundtrip_reaches_stream`: publish via
+      `core.realtime`, receive via the relay) so any prefix drift fails
+      loudly. (3) Auth is inline, not the shared `CurrentUser` dependency,
+      because a browser `EventSource` can't set an `Authorization` header —
+      the token may arrive as the `access_token` query param (header still
+      accepted as fallback); membership is re-checked on every reconnect, so
+      a revoked member's stream ends on their next reconnect (§5.4). (4)
+      Idle-tab backpressure: heartbeats keep the connection live and give
+      the loop a tick to notice an elapsed lifetime (`max_lifetime_seconds`,
+      default 5 min — bounds server resource use and caps how long a revoked
+      member outlives revocation) or a disconnected client (`is_disconnected`
+      = the request's own predicate, checked each tick). 10 new tests under
+      `tests/integration/omnichannel/test_stream.py` against real fakeredis
+      pub/sub — round-trip, per-user channel, cross-org isolation, heartbeat,
+      lifetime cap, disconnect teardown, plus endpoint auth (401 no/bad
+      token, 404 non-member, 200 member gets `text/event-stream`) — full
+      suite green at 148 (up from 138), `ruff` + `mypy --strict` clean.)*
 - [ ] Extensibility invariants hold (§5.2): `channel_type` is `TEXT`, one
       generic webhook route, one shared inbound queue — adding a channel
       touches only `adapters/` + the registry.

@@ -109,6 +109,16 @@ class Settings(BaseSettings):
             "files": self.ddb_files_table,
         }
 
+    @property
+    def omnichannel_queue_names(self) -> dict[str, str]:
+        """Omni-Channel SQS queue logical names -> physical queue names."""
+        return {
+            "inbound": self.omnichannel_inbound_queue,
+            "outbound": self.omnichannel_outbound_queue,
+            "inbound_dlq": self.omnichannel_inbound_dlq,
+            "outbound_dlq": self.omnichannel_outbound_dlq,
+        }
+
 
 @lru_cache(maxsize=1)
 def settings() -> Settings:

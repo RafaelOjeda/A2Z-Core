@@ -36,7 +36,7 @@ async def heartbeat(org_id: str, user_id: str, status: str = "online") -> None:
     await redis.set(_key(org_id, user_id), status, ex=_HEARTBEAT_TTL_SECONDS)
 
     now = datetime.now(timezone.utc)
-    async with db.get_session() as session:
+    async with db.get_session_context() as session:
         stmt = pg_insert(Presence).values(
             org_id=org_id, user_id=user_id, status=status, updated_at=now
         )

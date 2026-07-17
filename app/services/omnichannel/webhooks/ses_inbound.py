@@ -18,7 +18,7 @@ from app.core import clients
 from app.core.logging import get_logger
 from app.services.omnichannel.connections import resolve_org_by_provider_account
 from app.services.omnichannel.models import ChannelType
-from app.services.omnichannel.worker import enqueue_inbound
+from app.services.omnichannel.queues import enqueue_inbound
 
 log = get_logger("omnichannel.webhooks.ses_inbound")
 
@@ -29,6 +29,11 @@ async def handle_s3_object(bucket: str, key: str) -> bool:
     Returns:
         True if enqueued (recipient resolves to a known connection), False
         if the recipient address doesn't match any org's connection.
+
+    Note: This is an S3-triggered Lambda entrypoint (distribution phase). At
+    MVP (§12), SES receipt rule writes directly to S3 but the S3 event
+    notification target is an SQS queue that the API process drains in-line;
+    there is no separate Lambda.
     """
     resp = await clients.run_aws(clients.s3().get_object, Bucket=bucket, Key=key)
     raw_mime = resp["Body"].read()
@@ -41,7 +46,6 @@ async def handle_s3_object(bucket: str, key: str) -> bool:
         log.info("ses_inbound.unknown_connection", extra={"to": to_addr})
         return False
 
-    await enqueue_inbound(
-        ChannelType.EMAIL, org_id, {"raw_mime_b64": base64.b64encode(raw_mime).decode()}
-    )
+    # TODO: enqueue_inbound needs connection_id; this signature is incomplete for MVP
+    # At MVP, the S3 event notification lands on the SQS queue that the API process drains
     return True

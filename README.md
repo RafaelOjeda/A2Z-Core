@@ -6,7 +6,10 @@ a set of Python packages (`app/core/`) imported in-process by services inside a
 single FastAPI modular monolith on ECS Fargate.
 
 See `CLAUDE.md` (build conventions + gaps) and `A2Z_Core_Design_TestPlan.md`
-(authoritative API/schema spec).
+(authoritative API/schema spec). **For everything else — architecture
+diagrams, per-module reference docs, the Omni-Channel service, API/config
+reference, testing, CI/CD — see [`docs/README.md`](docs/README.md), the
+documentation index.**
 
 ## Golden rules
 
@@ -50,14 +53,16 @@ tests with a 90% coverage gate on `app/core`, the docker build, and
 ```
 app/
   config.py            # settings, table registry, rate-limit registry
-  core/                # ★ the platform packages (build first)
-  services/            # stubs until Phase 2+
-  routers/             # thin HTTP layer over core
+  core/                # ★ the platform packages (frozen — see docs/core/)
+  services/
+    omnichannel/       # the first product service built on Core (see docs/services/omnichannel/)
+    invoicing/         # stub — Phase 2, not yet built (see docs/phase2-invoicing.md)
+  routers/             # thin HTTP layer over core/services
   lambdas/             # out-of-band handlers (Cognito, SES/SNS)
 infra/                 # Terragrunt (modules + migrations)
-scripts/               # local provisioning, migrations
+scripts/               # local provisioning, Lambda packaging
 tests/                 # unit / integration / load
-docs/                  # events, retention, cost notes
+docs/                  # documentation index — see docs/README.md
 ```
 
 ## Status

@@ -1,5 +1,19 @@
 # Phase 2 — Invoicing Service: Kickoff Roadmap
 
+> Part of the [documentation index](README.md). See also: [architecture overview](architecture/overview.md), [Omni-Channel service docs](services/omnichannel/README.md) (the service this roadmap most overlaps with, since both need Postgres).
+
+> **Status update (post Omni-Channel Phase 3 work):** step 1's Postgres
+> foundation is **partially already in place**, built by Omni-Channel
+> rather than by this phase starting: `sqlalchemy[asyncio]`, `asyncpg`, and
+> `alembic` are already in `pyproject.toml`; a shared Postgres container
+> already runs in `docker-compose.yml` and CI; and `infra/modules/rds/` +
+> `infra/live/prod/rds/` already exist as Terraform (not yet applied — see
+> [`infra/README.md`](../infra/README.md)'s drift note and
+> [Omni-Channel known issues](services/omnichannel/known-issues.md#4-rds-terraform-module-exists-ahead-of-both-phases-that-would-use-it)).
+> What Invoicing still needs from step 1: its own package skeleton in
+> `app/services/invoicing/` and its own schema on that shared instance —
+> the instance and tooling no longer need to be built from scratch.
+
 > **Boundary:** Invoicing is NOT part of Core. It is a separate service living
 > in `app/services/invoicing/` inside the same modular monolith. It *imports*
 > Core; Core never imports it (golden rule #3, CLAUDE.md §2). The invoice

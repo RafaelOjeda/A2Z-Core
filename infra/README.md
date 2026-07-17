@@ -1,5 +1,7 @@
 # Infrastructure (Terragrunt)
 
+> See also: [`docs/architecture/deployment.md`](../docs/architecture/deployment.md) for the two deployment shapes this repo describes (Core's ECS Fargate control plane vs. Omni-Channel's single-EC2 MVP) and exactly which of the modules below back which shape.
+
 Terraform/Terragrunt for A2Z Core's AWS resources. The data-plane modules here
 mirror exactly what `scripts/create_local_resources.py` stands up against
 LocalStack (CLAUDE.md §12), so local and AWS stay in sync. The control-plane
@@ -19,14 +21,34 @@ infra/
 │   ├── ses/                  # SNS notifications topic + policy + domain identity
 │   ├── vpc/                  # 2-AZ subnets, 1 NAT, free DDB/S3 gateway endpoints, SGs
 │   ├── iam/                  # task + execution + Lambda roles (least privilege)
-│   ├── redis/                # ElastiCache cache.t4g.micro (single node)
+│   ├── redis/                # ElastiCache cache.t4g.micro (single node) -- Core's
+│   │                         #   control-plane cache; Omni-Channel's MVP EC2 box uses
+│   │                         #   an on-box Redis container instead (not this module)
 │   ├── cognito/              # user pool, SPA client, both Lambdas + trigger/SNS wiring
-│   └── ecs/                  # ECR, cluster, task def, ALB (:80), service, autoscaling
+│   ├── ecs/                  # ECR, cluster, task def, ALB (:80), service, autoscaling
+│   ├── rds/                  # single-AZ Postgres (db.t4g.micro) -- codified ahead of
+│   │                         #   need, see the drift note below
+│   └── sqs-omnichannel/      # Omni-Channel's inbound/outbound queues + DLQs
 └── live/
     └── prod/                 # per-module Terragrunt compositions
         ├── dynamodb/  s3/  eventbridge/  ses/
-        └── vpc/  iam/  redis/  cognito/  ecs/
+        ├── vpc/  iam/  redis/  cognito/  ecs/
+        └── rds/  sqs-omnichannel/
 ```
+
+> **Drift note**: `modules/rds` + `live/prod/rds` are codified but nothing
+> currently deploys against them — Omni-Channel's Postgres runs as an
+> on-box/docker-compose container today
+> (`app/services/omnichannel/CLAUDE.md` §12 explicitly defers RDS to a
+> future "distribution phase"), and `docs/phase2-invoicing.md` still lists
+> an RDS module as Phase 2 future work. Treat this module as pre-built
+> infrastructure for whichever need arrives first, not as evidence either
+> phase has started. See
+> [Omni-Channel known issues](../docs/services/omnichannel/known-issues.md#4-rds-terraform-module-exists-ahead-of-both-phases-that-would-use-it).
+>
+> Not yet codified at all: `ec2-app`, `secretsmanager-channels`, and
+> `ses-receipt-rules` — the three modules Omni-Channel's single-EC2 MVP
+> (`app/services/omnichannel/CLAUDE.md` §12) still needs.
 
 Cross-module wiring uses Terragrunt `dependency` blocks with `mock_outputs`
 (so `validate`/`plan` work before first apply); Terragrunt derives the apply
@@ -60,7 +82,10 @@ docker build -t <ecr_repository_url>:latest . && docker push <ecr_repository_url
 - **ACM + HTTPS listener** — the ALB serves :80 only until a domain + cert
   exist; add the :443 listener and redirect then.
 - **Route53** — DNS for the ALB and the SES domain-verification records.
-- **RDS Postgres** — arrives with the Invoicing service (Phase 2, Design §3.2).
+- **RDS actually wired up and applied** — the `rds` module itself already
+  exists (see the drift note above); what's still pending is a real
+  `terragrunt apply` and something pointing `DATABASE_URL` at it instead of
+  a container.
 
 Config sets are intentionally **not** in Terraform: Core creates one per
 `{org_id}-{service_type}` lazily on first send (CLAUDE.md §8). Terraform owns the

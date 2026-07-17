@@ -21,7 +21,18 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, MetaData, Numeric, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy import UniqueConstraint as UQ
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -75,7 +86,18 @@ class Conversation(Base):
 
     __tablename__ = "conversations"
     __table_args__ = (
-        Index("ix_conversations_inbox", "org_id", "status", "last_message_at"),
+        # last_message_at is DESC NULLS LAST, not plain ASC: the inbox query
+        # (inbox.list_conversations) orders by exactly this, and a btree only
+        # serves an ORDER BY whose direction *and* null placement it matches.
+        # A plain ASC index -- or even the `DESC` §5.1 originally called for,
+        # since DESC defaults to NULLS FIRST -- leaves the planner adding a
+        # Sort on top. Verified with EXPLAIN; see migration 0002.
+        Index(
+            "ix_conversations_inbox",
+            "org_id",
+            "status",
+            text("last_message_at DESC NULLS LAST"),
+        ),
         Index("ix_conversations_agent_inbox", "org_id", "assigned_user_id", "status"),
     )
 

@@ -169,10 +169,20 @@ carries `org_id` and every query filters on it (golden rule #2).
 | `commission_attributions` | `org_id`, `invoice_id`, `conversation_id`, `agent_user_id`, `rule_snapshot` (percent at attribution time), `amount` (filled on payment), `status` (`pending`/`credited`/`reversed`), timestamps. Derived/replayable from assignments + invoices. |
 
 Indexes at table-creation time, not later: inbox query
-(`org_id, status, last_message_at DESC`), agent inbox (`org_id,
+(`org_id, status, last_message_at DESC NULLS LAST`), agent inbox (`org_id,
 assigned_user_id, status`), thread view (`conversation_id, created_at`),
 full-text GIN on `messages.body_text` (tsvector), agent dashboard
 (`org_id, agent_user_id` on attributions).
+
+> **Corrected 2026-07-17 (Step 9):** this list said `last_message_at DESC`,
+> and the Step 2 baseline built it plain **ASC** — but *neither* lets the
+> index serve the inbox `ORDER BY`. A btree only satisfies an ORDER BY whose
+> direction **and null placement** it matches, and Postgres defaults `DESC` to
+> `NULLS FIRST` while the query needs `NULLS LAST` (a conversation with no
+> messages must not outrank live ones). Verified with `EXPLAIN` on 20k rows:
+> ASC → Sort, `DESC` → Sort, `DESC NULLS LAST` → no Sort. Fixed in migration
+> `0002_inbox_index_desc_nulls_last`, and guarded by
+> `test_inbox.py::test_inbox_query_uses_index_without_sorting`.
 
 **`channel_type` is `TEXT`, never a Postgres `ENUM`** — validated by a
 Pydantic enum at the app layer only. A DB enum would force a migration
@@ -894,6 +904,31 @@ already allows multiple attributions per invoice), public Inbox API
       lifetime cap, disconnect teardown, plus endpoint auth (401 no/bad
       token, 404 non-member, 200 member gets `text/event-stream`) — full
       suite green at 148 (up from 138), `ruff` + `mypy --strict` clean.)*
+- [x] Agents can actually read the inbox: list conversations, open a thread,
+      see attachments. *(Done 2026-07-17 — Build Order Step 9. **This was a
+      gap in the plan itself, not a skipped step**: §13's build order went
+      message flow → assignment → real-time → freeze and never included a read
+      API, so v1 could ingest, route, assign and reply to messages that no
+      agent could see. The tell was in Step 2: §5.1 specifies indexes it names
+      "the inbox query", "agent inbox" and "thread view" — indexes for queries
+      nobody had written. (§14 decision #5 doesn't cover this; it defers a
+      *public* third-party API while explicitly scoping v1 to "the internal
+      agent inbox".) New `inbox.py` + three endpoints: `GET
+      /orgs/{org_id}/conversations` (paginated, status/assignee filters),
+      `GET /orgs/{org_id}/conversations/{id}` (thread + signed attachment
+      URLs via the Step 8 `media.py` helper, which until now had no caller),
+      and `POST .../read`. Notes: reads require **membership only** — §4
+      grants every role including Viewer read access, unlike send/claim which
+      exclude GUEST. `mark_read` is its own POST rather than a side effect of
+      the GET, since a prefetch or double-render would otherwise silently
+      clear someone's unread badge — and it's the missing counterpart to the
+      worker's `unread_count += 1`, which until now only ever grew. Thread
+      reads select newest-first then reverse, so a limited read returns the
+      tail an agent opens to, not the oldest messages. Attachments load in one
+      batched `IN` query (a 50-message thread would otherwise be 50
+      round-trips), and their filename is recovered from the S3 key —
+      `message_attachments` has no filename column. 23 tests, incl. cross-org
+      isolation on every read path.)*
 - [x] Extensibility invariants hold (§5.2): `channel_type` is `TEXT`, one
       generic webhook route, one shared inbound queue — adding a channel
       touches only `adapters/` + the registry. *(All three guarded by tests:

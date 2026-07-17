@@ -24,6 +24,9 @@ from app.services.omnichannel.models import Base
 
 pytestmark = pytest.mark.integration
 
+# Whether this session has already rebuilt the schema from models.py.
+_schema_rebuilt = False
+
 
 @pytest.fixture(autouse=True)
 def _fresh_queue_url_cache() -> Iterator[None]:
@@ -42,7 +45,7 @@ def _fresh_queue_url_cache() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 async def _fresh_engine() -> AsyncIterator[None]:
-    """Rebuild the engine every test.
+    """Rebuild the engine every test, and the schema once per session.
 
     ``db.engine()``/``db.session_factory()`` are ``lru_cache``'d singletons
     (matching ``core.clients``), but pytest-asyncio hands each test function
@@ -51,10 +54,23 @@ async def _fresh_engine() -> AsyncIterator[None]:
     ``clients.redis_client()`` by monkeypatching a fresh fake per test rather
     than reusing the cached singleton across tests; this does the
     equivalent for the real Postgres engine.
+
+    The schema is dropped once per session, before the first
+    ``create_all()``: create_all silently skips tables that already exist --
+    **indexes included** -- so a database left over from an earlier run (or
+    from a manual ``alembic upgrade``) keeps serving its old schema and masks
+    any model change. Not hypothetical: it made an index-usage test pass
+    against a stale index while models.py said otherwise. CI gets a fresh
+    container per run and would never have caught it; local runs wouldn't
+    either, without this.
     """
+    global _schema_rebuilt
     db.reset_engine()
     engine = db.engine()
     async with engine.begin() as conn:
+        if not _schema_rebuilt:
+            await conn.execute(text("DROP SCHEMA IF EXISTS omnichannel CASCADE"))
+            _schema_rebuilt = True
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS omnichannel"))
         await conn.run_sync(Base.metadata.create_all)
     yield

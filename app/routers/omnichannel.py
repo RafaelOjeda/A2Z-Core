@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import auth, membership
 from app.core.exceptions import NotFoundError
 from app.dependencies import CurrentUser
-from app.services.omnichannel import handlers, routing, stream
+from app.services.omnichannel import handlers, inbox, routing, stream
 from app.services.omnichannel.db import get_session
 from app.services.omnichannel.webhooks import handle_webhook
 
@@ -38,6 +38,52 @@ async def receive_webhook(
     headers = dict(request.headers)
     await handle_webhook(session, channel_type, connection_id, raw_body, headers)
     return {"status": "accepted"}
+
+
+@router.get("/orgs/{org_id}/conversations")
+async def list_conversations(
+    org_id: str,
+    user: CurrentUser,
+    session: DbSession,
+    status: str | None = None,
+    assigned_user_id: str | None = None,
+    limit: int = inbox.DEFAULT_CONVERSATION_LIMIT,
+    offset: int = 0,
+) -> list[inbox.ConversationSummary]:
+    """The unified inbox: an org's conversations, most recently active first (§3)."""
+    return await inbox.list_conversations(
+        session,
+        org_id,
+        user["sub"],
+        status=status,
+        assigned_user_id=assigned_user_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/orgs/{org_id}/conversations/{conversation_id}")
+async def get_conversation(
+    org_id: str,
+    conversation_id: str,
+    user: CurrentUser,
+    session: DbSession,
+    limit: int = inbox.DEFAULT_MESSAGE_LIMIT,
+) -> inbox.ConversationDetail:
+    """One conversation's thread, with signed attachment URLs (§3, §10)."""
+    return await inbox.get_conversation(session, org_id, conversation_id, user["sub"], limit=limit)
+
+
+@router.post("/orgs/{org_id}/conversations/{conversation_id}/read")
+async def mark_read(
+    org_id: str,
+    conversation_id: str,
+    user: CurrentUser,
+    session: DbSession,
+) -> dict[str, int | str]:
+    """Clear a conversation's unread badge. POST, not a side effect of the GET."""
+    conversation = await inbox.mark_read(session, org_id, conversation_id, user["sub"])
+    return {"conversation_id": conversation.id, "unread_count": conversation.unread_count}
 
 
 class SendReplyRequest(BaseModel):

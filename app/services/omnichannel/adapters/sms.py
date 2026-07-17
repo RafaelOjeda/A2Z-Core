@@ -34,7 +34,7 @@ from app.services.omnichannel.adapters.types import (
     SendResult,
     SupportedFeatures,
 )
-from app.services.omnichannel.models import ChannelType, MessageStatus
+from app.services.omnichannel.models import MessageStatus
 
 
 class SmsAdapter:

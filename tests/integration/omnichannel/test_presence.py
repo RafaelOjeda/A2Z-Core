@@ -23,7 +23,7 @@ async def test_default_status_is_offline() -> None:
 async def test_heartbeat_writes_postgres_backup_row() -> None:
     await presence.heartbeat("org-a", "user-1", status="away")
 
-    async with db.get_session() as session:
+    async with db.get_session_context() as session:
         row = (
             await session.execute(
                 select(Presence).where(Presence.org_id == "org-a", Presence.user_id == "user-1")
@@ -36,7 +36,7 @@ async def test_heartbeat_upserts_backup_row_on_repeat_calls() -> None:
     await presence.heartbeat("org-a", "user-1", status="online")
     await presence.heartbeat("org-a", "user-1", status="away")
 
-    async with db.get_session() as session:
+    async with db.get_session_context() as session:
         rows = (
             (
                 await session.execute(

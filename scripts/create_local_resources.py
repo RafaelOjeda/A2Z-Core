@@ -124,20 +124,6 @@ def _create_queue(name: str, *, redrive_target_arn: str | None = None) -> str:
     return str(arn_resp["Attributes"]["QueueArn"])
 
 
-def create_omnichannel_queues() -> None:
-    """Create Omni-Channel's shared inbound/outbound queues + their DLQs (§5.6, §12).
-
-    One inbound queue for every channel (§5.2 extensibility invariant) and
-    one outbound queue -- never per-channel queues. DLQs are created first so
-    the main queues' redrive policies can reference their ARNs.
-    """
-    s = settings()
-    inbound_dlq_arn = _create_queue(s.omnichannel_inbound_dlq)
-    outbound_dlq_arn = _create_queue(s.omnichannel_outbound_dlq)
-    _create_queue(s.omnichannel_inbound_queue, redrive_target_arn=inbound_dlq_arn)
-    _create_queue(s.omnichannel_outbound_queue, redrive_target_arn=outbound_dlq_arn)
-
-
 def verify_ses_identity(domain: str = "example.com") -> None:
     """Register a sample SES domain identity so local sends succeed."""
     ses = clients.ses()

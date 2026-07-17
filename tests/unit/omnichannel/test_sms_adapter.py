@@ -11,7 +11,7 @@ from app.core import clients
 from app.services.omnichannel.adapters.base import ChannelAdapter
 from app.services.omnichannel.adapters.sms import SmsAdapter
 from app.services.omnichannel.adapters.types import OutboundContent
-from app.services.omnichannel.models import ChannelType, MessageStatus
+from app.services.omnichannel.models import MessageStatus
 
 
 def test_adapter_satisfies_channel_adapter_protocol() -> None:
@@ -36,10 +36,12 @@ async def test_normalize_inbound_parses_two_way_sms_payload() -> None:
 
     assert len(messages) == 1
     msg = messages[0]
-    assert msg.channel_type == ChannelType.SMS
+    # NormalizedInboundMessage is deliberately channel-agnostic (§5.2): the
+    # channel and the org's own number come from the connection the webhook
+    # arrived on, not the message body -- so the normalized shape carries only
+    # the customer's identity, the provider id, and the text.
     assert msg.external_message_id == "sns-msg-1"
-    assert msg.from_identity == "+15550001111"
-    assert msg.to_identity == "+15559998888"
+    assert msg.external_id == "+15550001111"
     assert msg.body_text == "Can I get a quote?"
 
 

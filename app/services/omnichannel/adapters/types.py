@@ -38,6 +38,7 @@ class OutboundContent(BaseModel):
 class SendResult(BaseModel):
     external_message_id: str
     status: str
+    error: str | None = None
 
 
 class InboundAttachment(BaseModel):
@@ -60,3 +61,4 @@ class NormalizedInboundMessage(BaseModel):
 class DeliveryStatusUpdate(BaseModel):
     external_message_id: str
     status: str
+    error: str | None = None

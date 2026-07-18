@@ -90,3 +90,15 @@ async def send_email(body: SendEmailRequest, user: CurrentUser) -> EmailResult:
         body_text=body.body_text,
         metadata=body.metadata,
     )
+
+
+@router.get("/orgs/{org_id}/domain-verification")
+async def get_domain_verification_status(org_id: str, user: CurrentUser) -> dict[str, str]:
+    """Poll SES's live verification status for the org's configured domain.
+
+    Lets a "connect your channel" UI show "waiting on DNS..." vs "verified"
+    without anyone checking the SES console by hand.
+    """
+    await require_member(org_id, user)
+    status = await email.get_domain_verification_status(org_id)
+    return {"status": status}

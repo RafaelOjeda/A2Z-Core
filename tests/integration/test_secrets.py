@@ -55,3 +55,30 @@ async def test_cache_hit_skips_second_aws_call(aws: None, monkeypatch: pytest.Mo
 
     result = await secrets.get_secret("org-a", "omnichannel", "whatsapp")
     assert result == {"token": "a"}
+
+
+async def test_put_secret_round_trip_against_moto(aws: None) -> None:
+    """The self-service write path: no pre-seeded secret, put_secret creates it."""
+    await secrets.put_secret("org-a", "omnichannel", "conn-1", {"access_token": "tok-abc"})
+
+    result = await secrets.get_secret("org-a", "omnichannel", "conn-1")
+    assert result == {"access_token": "tok-abc"}
+
+
+async def test_put_secret_updates_existing_against_moto(aws: None) -> None:
+    await _seed("org-a", "omnichannel", "conn-1", {"access_token": "old"})
+
+    await secrets.put_secret("org-a", "omnichannel", "conn-1", {"access_token": "new"})
+
+    result = await secrets.get_secret("org-a", "omnichannel", "conn-1")
+    assert result == {"access_token": "new"}
+
+
+async def test_put_secret_cross_org_isolation(aws: None) -> None:
+    await secrets.put_secret("org-a", "omnichannel", "conn-1", {"token": "a"})
+    await secrets.put_secret("org-b", "omnichannel", "conn-1", {"token": "b"})
+
+    a = await secrets.get_secret("org-a", "omnichannel", "conn-1")
+    b = await secrets.get_secret("org-b", "omnichannel", "conn-1")
+    assert a == {"token": "a"}
+    assert b == {"token": "b"}

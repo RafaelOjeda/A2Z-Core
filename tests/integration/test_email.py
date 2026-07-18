@@ -6,7 +6,8 @@ import pytest
 
 from app.core import email
 from app.core.email import EmailStatus, ServiceType
-from app.core.exceptions import RateLimitError, SuppressionListError
+from app.core.exceptions import InvalidAddressError, RateLimitError, SuppressionListError
+from app.core.settings import get_org_settings
 
 pytestmark = pytest.mark.integration
 
@@ -159,3 +160,42 @@ async def test_config_set_gets_sns_event_destination(
         assert r2.status == EmailStatus.SENT
     finally:
         config.settings.cache_clear()
+
+
+# --- domain verification (self-service "connect your channel" flow) ---
+
+
+async def test_start_domain_verification_returns_dns_records(aws: None) -> None:
+    org_id = "org-domain-1"
+
+    records = await email.start_domain_verification(org_id, "acme.com", "admin-1")
+
+    assert records.domain == "acme.com"
+    assert records.verification_txt_name == "_amazonses.acme.com"
+    assert records.verification_txt_value
+    assert len(records.dkim_cname_records) == 3
+    for record in records.dkim_cname_records:
+        assert record.name.endswith("._domainkey.acme.com")
+        assert record.value.endswith(".dkim.amazonses.com")
+
+    # Saved on the org so send_email starts using it.
+    org = await get_org_settings(org_id)
+    assert org.domain == "acme.com"
+
+
+async def test_start_domain_verification_rejects_bad_domain(aws: None) -> None:
+    with pytest.raises(InvalidAddressError):
+        await email.start_domain_verification("org-domain-2", "not a domain", "admin-1")
+
+
+async def test_domain_verification_status_not_started_without_a_domain(aws: None) -> None:
+    status = await email.get_domain_verification_status("org-domain-3")
+    assert status == "NotStarted"
+
+
+async def test_domain_verification_status_after_verifying(aws: None) -> None:
+    org_id = "org-domain-4"
+    await email.start_domain_verification(org_id, "acme.com", "admin-1")
+
+    status = await email.get_domain_verification_status(org_id)
+    assert status == "Success"

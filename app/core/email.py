@@ -35,7 +35,7 @@ from app.core.audit import ActionType, log_audit
 from app.core.events import publish_event
 from app.core.exceptions import EmailError, InvalidAddressError, SuppressionListError
 from app.core.logging import get_logger
-from app.core.settings import get_org_settings
+from app.core.settings import get_org_settings, set_org_settings
 
 log = get_logger("core.email")
 
@@ -44,6 +44,13 @@ _CONFIG_SET_CACHE_TTL = 24 * 3600
 # Local/dev fallback when an org hasn't set a verified domain yet. In prod the
 # org must configure a verified domain (Design §2.3 step 1).
 _DEFAULT_DOMAIN = "example.com"
+
+# Deliberately loose, same posture as _ADDRESS_RE: reject obvious garbage,
+# let SES be the real authority on whether a domain can actually be verified.
+_DOMAIN_RE = re.compile(
+    r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
+)
 
 
 class ServiceType(str, Enum):
@@ -242,6 +249,87 @@ async def send_email(
         timestamp=now,
         external_message_id=message_id,
     )
+
+
+@dataclass
+class DkimRecord:
+    name: str
+    value: str
+
+
+@dataclass
+class DomainVerificationRecords:
+    domain: str
+    verification_txt_name: str
+    verification_txt_value: str
+    dkim_cname_records: list[DkimRecord]
+
+
+async def start_domain_verification(
+    org_id: str, domain: str, changed_by: str
+) -> DomainVerificationRecords:
+    """Kick off SES domain + DKIM verification for an org's own sending domain.
+
+    Self-service counterpart to an engineer checking the SES console by hand:
+    returns the exact DNS records (one TXT, three CNAME) the org needs to add.
+    Saves ``domain`` on the org's settings immediately so ``send_email`` starts
+    using it once SES finishes verifying (out-of-band, typically minutes but
+    up to 72h) -- sending against an unverified domain fails at SES, not here.
+    Idempotent: SES reissues the same tokens for an already-pending identity,
+    so calling this again (e.g. after fixing a DNS typo) is safe.
+
+    Raises:
+        InvalidAddressError: ``domain`` is not a plausible domain name.
+        EmailError: The underlying SES calls failed.
+
+    Performance: < 500ms (two SES calls + one settings write).
+    """
+    if not _DOMAIN_RE.match(domain):
+        raise InvalidAddressError(f"Invalid domain: {domain!r}")
+
+    try:
+        verify_resp = await clients.run_aws(clients.ses().verify_domain_identity, Domain=domain)
+        dkim_resp = await clients.run_aws(clients.ses().verify_domain_dkim, Domain=domain)
+    except ClientError as exc:
+        raise EmailError(f"Failed to start domain verification for {domain!r}: {exc}") from exc
+
+    await set_org_settings(org_id, {"domain": domain}, changed_by)
+
+    dkim_records = [
+        DkimRecord(name=f"{token}._domainkey.{domain}", value=f"{token}.dkim.amazonses.com")
+        for token in dkim_resp["DkimTokens"]
+    ]
+    return DomainVerificationRecords(
+        domain=domain,
+        verification_txt_name=f"_amazonses.{domain}",
+        verification_txt_value=verify_resp["VerificationToken"],
+        dkim_cname_records=dkim_records,
+    )
+
+
+async def get_domain_verification_status(org_id: str) -> str:
+    """Check SES's live verification status for the org's configured domain.
+
+    Returns one of SES's ``VerificationStatus`` values (``"Pending"``,
+    ``"Success"``, ``"Failed"``, ``"TemporaryFailure"``), or ``"NotStarted"``
+    if the org hasn't configured a domain yet. Deliberately uncached --
+    verification completes out-of-band on SES's own clock, and a stale
+    "Pending" would misreport a domain that just went live.
+
+    Performance: < 300ms (one SES call).
+    """
+    org = await get_org_settings(org_id)
+    if not org.domain:
+        return "NotStarted"
+
+    resp = await clients.run_aws(
+        clients.ses().get_identity_verification_attributes, Identities=[org.domain]
+    )
+    attrs = resp.get("VerificationAttributes", {}).get(org.domain)
+    if not attrs:
+        return "NotStarted"
+    status: str = attrs["VerificationStatus"]
+    return status
 
 
 async def _ses_send(

@@ -18,6 +18,7 @@ module or service you're actually touching.
 | [`architecture/overview.md`](architecture/overview.md) | System components, layer responsibilities, why a monolith |
 | [`architecture/request-lifecycle.md`](architecture/request-lifecycle.md) | HTTP request → router → Core → response; the error-mapping convention |
 | [`architecture/auth-and-authorization.md`](architecture/auth-and-authorization.md) | JWT validation, Cognito signup flow, the role model, the role-vocabulary gap |
+| [`architecture/zero-trust.md`](architecture/zero-trust.md) | How Zero Trust maps onto the monolith, per-entry-point verification in Omni-Channel, and the proposed `core.authz` shared library |
 | [`architecture/data-flow.md`](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Redis/Secrets Manager, and how org-scoping is enforced per store |
 | [`architecture/event-driven-architecture.md`](architecture/event-driven-architecture.md) | EventBridge vs. Redis pub/sub — two mechanisms, when to use which |
 | [`architecture/deployment.md`](architecture/deployment.md) | ECS Fargate control plane vs. Omni-Channel's single-EC2 MVP; what's actually codified vs. planned |

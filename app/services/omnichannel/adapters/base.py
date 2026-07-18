@@ -33,6 +33,27 @@ class ChannelAdapter(Protocol):
         """Verify an inbound webhook's signature before anything else runs (§5.6)."""
         ...
 
+    async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str:
+        """Answer a provider's webhook-subscription verification handshake
+        (e.g. Meta's ``GET .../webhooks/...?hub.mode=subscribe&hub.challenge=...``,
+        API review 2026-07-18).
+
+        Args:
+            params: The request's query params, provider-shaped (e.g. Meta's
+                ``hub.mode``/``hub.verify_token``/``hub.challenge``).
+            credentials: This connection's secret bundle (same shape
+                ``send_outbound`` receives), expected to carry whatever the
+                channel needs to check the request is genuine.
+
+        Returns:
+            The challenge value to echo back verbatim.
+
+        Raises:
+            ChannelAdapterError: This channel has no such handshake, or the
+                request doesn't check out (wrong/missing verify token).
+        """
+        ...
+
     async def normalize_inbound(
         self, raw_payload: dict[str, Any]
     ) -> list[NormalizedInboundMessage]:

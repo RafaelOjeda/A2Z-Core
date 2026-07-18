@@ -41,9 +41,19 @@ class ConnectionNotFoundError(OmniChannelError):
 
 
 class RoutingError(OmniChannelError):
-    """The routing strategy could not assign a conversation."""
+    """The requested routing configuration is invalid (bad/unsupported strategy,
+    or a required field is missing) -- always a client input problem, not an
+    engine failure.
 
-    status_code = 500
+    DOCUMENTED CORRECTION (API review, 2026-07-18): originally specced as a
+    generic 500 (CLAUDE.md §8), but every actual raise site
+    (``routing.py::set_routing_config``) is a request-validation failure, and
+    the published API reference already documented this as 400. Fixed here
+    to match reality rather than "fixing" the docs back to a 500 that was
+    never earned by an actual internal-failure code path.
+    """
+
+    status_code = 400
 
 
 class CommissionError(OmniChannelError):
@@ -80,3 +90,27 @@ class ConversationAlreadyAssignedError(OmniChannelError):
     """
 
     status_code = 409
+
+
+class InvalidQueryError(OmniChannelError):
+    """A list/search query param is malformed: an unknown ``sort`` value or a
+    cursor that doesn't decode to a valid (timestamp, id) pair.
+
+    Added with keyset pagination (API review, 2026-07-18): a tampered or
+    stale cursor must fail as a client error, not a 500 from an unhandled
+    decode exception.
+    """
+
+    status_code = 400
+
+
+class ConnectionValidationError(OmniChannelError):
+    """A channel-connection create/update request is invalid: an unregistered
+    ``channel_type`` (§5.2 -- only adapters actually in the registry may be
+    connected), or a ``credentials_secret_key`` that doesn't resolve to an
+    existing secret.
+
+    Added with the connections CRUD API (API review, 2026-07-18).
+    """
+
+    status_code = 400

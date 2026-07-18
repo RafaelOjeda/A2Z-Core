@@ -73,8 +73,9 @@ flowchart TB
 
 ## Public interfaces
 
-- **HTTP** — mounted at `/omnichannel/*` in `app/main.py`; full reference in
-  [`api-reference.md`](api-reference.md).
+- **HTTP** — mounted at `/v1/omnichannel/*` in `app/main.py` (versioning
+  policy: [root API reference](../../api-reference.md#versioning)); full
+  reference in [`api-reference.md`](api-reference.md).
 - **Events** — publishes `message.received`, `message.sent`,
   `conversation.assigned` on `a2z-bus` (`source="a2z.omnichannel"`);
   designed-but-unpublished `conversation.invoice_requested`; consumes (once
@@ -120,8 +121,9 @@ documented inconsistency in the migration chain).
 `app/services/omnichannel/exceptions.py` extends `core.exceptions.CoreError`
 with service-specific subclasses (`ChannelAdapterError` 502,
 `WebhookSignatureError` 401, `ConnectionNotFoundError` 404, `RoutingError`
-500, `CommissionError` 409, `ConversationNotFoundError` 404, `ForbiddenError`
-403, `ConversationAlreadyAssignedError` 409) — mapped to HTTP responses by
+400, `CommissionError` 409, `ConversationNotFoundError` 404, `ForbiddenError`
+403, `ConversationAlreadyAssignedError` 409, `InvalidQueryError` 400,
+`ConnectionValidationError` 400) — mapped to HTTP responses by
 the same global handler as every Core error (see
 [request lifecycle](../../architecture/request-lifecycle.md)).
 
@@ -140,9 +142,10 @@ the same global handler as every Core error (see
 ## Example usage
 
 See [`api-reference.md`](api-reference.md) for full request/response shapes.
-A minimal flow: connect a channel → customer messages it → webhook lands →
-worker creates the conversation → agent sees it via
-`GET /omnichannel/orgs/{org_id}/conversations` → agent replies via
+A minimal flow: `POST /v1/omnichannel/orgs/{org_id}/connections` registers a
+channel → customer messages it → webhook lands → worker creates the
+conversation → agent sees it via
+`GET /v1/omnichannel/orgs/{org_id}/conversations` → agent replies via
 `POST .../messages` → worker sends it out.
 
 ## Common extension points

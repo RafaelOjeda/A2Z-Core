@@ -28,6 +28,7 @@ from app.core.membership import Membership, Role
 from app.services.omnichannel import handlers, queues, webhooks, worker
 from app.services.omnichannel.adapters import whatsapp as whatsapp_module
 from app.services.omnichannel.exceptions import (
+    ChannelAdapterError,
     ConnectionNotFoundError,
     ConversationNotFoundError,
     WebhookSignatureError,
@@ -198,6 +199,63 @@ async def test_webhook_retry_produces_one_message_row(
     assert len(messages) == 1  # but the idempotency constraint held: one row
 
 
+# --- Webhook subscription verification (GET handshake) ---
+
+
+async def test_verify_subscription_echoes_challenge_on_match(
+    aws: None, session: AsyncSession
+) -> None:
+    connection = await _seed_connection(session)
+    await _seed_secret(
+        connection.org_id,
+        connection.credentials_secret_key,
+        {"app_secret": _APP_SECRET, "verify_token": "let-me-in"},
+    )
+
+    challenge = await webhooks.verify_subscription(
+        session,
+        "whatsapp",
+        connection.id,
+        {"hub.mode": "subscribe", "hub.verify_token": "let-me-in", "hub.challenge": "12345"},
+    )
+
+    assert challenge == "12345"
+
+
+async def test_verify_subscription_rejects_wrong_token(aws: None, session: AsyncSession) -> None:
+    connection = await _seed_connection(session)
+    await _seed_secret(
+        connection.org_id,
+        connection.credentials_secret_key,
+        {"app_secret": _APP_SECRET, "verify_token": "let-me-in"},
+    )
+
+    with pytest.raises(ChannelAdapterError):
+        await webhooks.verify_subscription(
+            session,
+            "whatsapp",
+            connection.id,
+            {"hub.mode": "subscribe", "hub.verify_token": "wrong", "hub.challenge": "12345"},
+        )
+
+
+async def test_verify_subscription_unknown_connection_raises(
+    aws: None, session: AsyncSession
+) -> None:
+    with pytest.raises(ConnectionNotFoundError):
+        await webhooks.verify_subscription(session, "whatsapp", "does-not-exist", {})
+
+
+async def test_verify_subscription_not_supported_for_email(
+    aws: None, session: AsyncSession
+) -> None:
+    connection = await _seed_connection(session, channel_type="email")
+    await _seed_secret(connection.org_id, connection.credentials_secret_key, {})
+
+    with pytest.raises(ChannelAdapterError):
+        await webhooks.verify_subscription(session, "email", connection.id, {})
+
+
 # --- Outbound: handler -> SQS -> worker -> adapter send ---
 
 
@@ -239,9 +297,10 @@ async def test_outbound_flow_sends_and_marks_sent(
         AsyncMock(return_value=_member_stub(connection.org_id)),
     )
 
-    message = await handlers.send_reply(
+    message, created = await handlers.send_reply(
         session, connection.org_id, conversation.id, "u1", "On its way!"
     )
+    assert created is True
     assert message.status == "queued"
 
     processed = await worker.process_outbound_batch(session)
@@ -253,6 +312,89 @@ async def test_outbound_flow_sends_and_marks_sent(
     mock_publish_event.assert_called_once()
     assert mock_publish_event.call_args.args[1] == "message.sent"
     mock_publish_update.assert_called_once()
+
+
+async def test_send_reply_idempotency_key_replay_does_not_duplicate(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = await _seed_connection(session)
+    conversation = await _seed_identity_and_conversation(session, connection.org_id)
+    monkeypatch.setattr(
+        "app.services.omnichannel.handlers.get_membership",
+        AsyncMock(return_value=_member_stub(connection.org_id)),
+    )
+
+    first, created_first = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi", client_dedup_key="req-1"
+    )
+    second, created_second = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi (retried)", client_dedup_key="req-1"
+    )
+
+    assert created_first is True
+    assert created_second is False
+    assert second.id == first.id
+    assert second.body_text == "hi"  # the original send, not the retried body
+
+    rows = (await session.execute(select(Message))).scalars().all()
+    assert len(rows) == 1
+
+
+async def test_send_reply_without_idempotency_key_is_not_deduped(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting the header preserves the pre-existing always-a-fresh-send behavior."""
+    connection = await _seed_connection(session)
+    conversation = await _seed_identity_and_conversation(session, connection.org_id)
+    monkeypatch.setattr(
+        "app.services.omnichannel.handlers.get_membership",
+        AsyncMock(return_value=_member_stub(connection.org_id)),
+    )
+
+    _first, created_first = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi"
+    )
+    _second, created_second = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi"
+    )
+
+    assert created_first is True
+    assert created_second is True
+    rows = (await session.execute(select(Message))).scalars().all()
+    assert len(rows) == 2
+
+
+async def test_send_reply_idempotency_key_scoped_per_conversation(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same client key in a different conversation is not a collision."""
+    connection = await _seed_connection(session)
+    conv_a = await _seed_identity_and_conversation(session, connection.org_id)
+    identity_b = ChannelIdentity(
+        org_id=connection.org_id, channel_type="whatsapp", external_id="15559998888"
+    )
+    session.add(identity_b)
+    await session.flush()
+    conv_b = Conversation(
+        org_id=connection.org_id, customer_identity_id=identity_b.id, status="open"
+    )
+    session.add(conv_b)
+    await session.commit()
+
+    monkeypatch.setattr(
+        "app.services.omnichannel.handlers.get_membership",
+        AsyncMock(return_value=_member_stub(connection.org_id)),
+    )
+
+    _a, created_a = await handlers.send_reply(
+        session, connection.org_id, conv_a.id, "u1", "hi a", client_dedup_key="same-key"
+    )
+    _b, created_b = await handlers.send_reply(
+        session, connection.org_id, conv_b.id, "u1", "hi b", client_dedup_key="same-key"
+    )
+
+    assert created_a is True
+    assert created_b is True
 
 
 async def test_send_reply_not_a_member_raises(
@@ -323,7 +465,9 @@ async def test_outbound_send_failure_leaves_message_for_retry(
 
     monkeypatch.setattr(whatsapp_module, "_post_graph_api", _raise)
 
-    message = await handlers.send_reply(session, connection.org_id, conversation.id, "u1", "hi")
+    message, _created = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi"
+    )
 
     processed = await worker.process_outbound_batch(session)
     assert processed == 0  # not deleted -- still eligible for SQS's own retry

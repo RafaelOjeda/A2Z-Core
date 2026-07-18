@@ -13,20 +13,34 @@ the indexes §5.1 already specifies:
 Agent and Viewer -- read access to all of the org's conversations, so these
 only require membership. ``handlers.send_reply`` / ``routing.claim`` exclude
 GUEST (Viewer); reading deliberately does not.
+
+**Pagination is keyset (cursor), not offset (API review, 2026-07-18).** A
+bare ``offset`` drifts under concurrent inserts (a new inbound message
+shifts every later page by one) and its cost grows with page depth. The
+cursor encodes ``(last_message_at, id)`` -- the exact tuple the ORDER BY
+sorts on -- so "next page" means "continue past this row," not "skip N."
+``id`` is the tiebreaker (timestamps can collide) and is not part of
+``ix_conversations_inbox`` itself; ties are rare enough in practice that
+Postgres serves the tiebreak with an Incremental Sort over the index's
+output rather than a full Sort, so §5.1's "no Sort" invariant for the
+common case still holds -- see ``test_inbox_query_uses_index_without_sorting``.
 """
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.exceptions import NotFoundError
 from app.core.membership import get_membership
 from app.services.omnichannel import media
-from app.services.omnichannel.exceptions import ConversationNotFoundError
+from app.services.omnichannel.exceptions import ConversationNotFoundError, InvalidQueryError
 from app.services.omnichannel.models import (
     ChannelIdentity,
     Conversation,
@@ -38,6 +52,8 @@ from app.services.omnichannel.models import (
 MAX_LIMIT = 100
 DEFAULT_CONVERSATION_LIMIT = 50
 DEFAULT_MESSAGE_LIMIT = 50
+
+_SORT_FIELDS = ("-last_message_at", "last_message_at")
 
 
 class AttachmentView(BaseModel):
@@ -76,6 +92,33 @@ class ConversationSummary(BaseModel):
 class ConversationDetail(BaseModel):
     conversation: ConversationSummary
     messages: list[MessageView]
+    # Set when older messages exist beyond `messages`; pass back as `before`
+    # to page further into the thread's history.
+    messages_next_cursor: str | None = None
+
+
+class ConversationPage(BaseModel):
+    items: list[ConversationSummary]
+    # Set when more conversations exist beyond `items`; pass back as `cursor`
+    # to fetch the next page. `None` means this was the last page.
+    next_cursor: str | None = None
+
+
+def _encode_cursor(ts: datetime | None, id_: str) -> str:
+    raw = json.dumps([ts.isoformat() if ts is not None else None, id_]).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime | None, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        ts_raw, id_ = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        ts = datetime.fromisoformat(ts_raw) if ts_raw is not None else None
+    except Exception as exc:
+        raise InvalidQueryError(f"Malformed cursor: {cursor!r}") from exc
+    if not isinstance(id_, str):
+        raise InvalidQueryError(f"Malformed cursor: {cursor!r}")
+    return ts, id_
 
 
 def _filename_from_key(s3_key: str) -> str:
@@ -118,6 +161,25 @@ def _summary(conversation: Conversation, identity: ChannelIdentity) -> Conversat
     )
 
 
+def _cursor_predicate(*, sort_desc: bool, ts: datetime | None, id_: str) -> ColumnElement[bool]:
+    """Continuation predicate for keyset pagination over (last_message_at, id).
+
+    Both directions treat NULL ``last_message_at`` as sorting last (matching
+    ``list_conversations``' ORDER BY, symmetric in either direction) --
+    "never active" conversations belong at the end of the list regardless
+    of which way it's sorted.
+    """
+    col = Conversation.last_message_at
+    id_col = Conversation.id
+    if sort_desc:
+        if ts is not None:
+            return or_(col < ts, and_(col == ts, id_col < id_), col.is_(None))
+        return and_(col.is_(None), id_col < id_)
+    if ts is not None:
+        return or_(col > ts, and_(col == ts, id_col > id_))
+    return and_(col.is_(None), id_col > id_)
+
+
 async def list_conversations(
     session: AsyncSession,
     org_id: str,
@@ -125,10 +187,12 @@ async def list_conversations(
     *,
     status: str | None = None,
     assigned_user_id: str | None = None,
+    q: str | None = None,
+    sort: str = "-last_message_at",
     limit: int = DEFAULT_CONVERSATION_LIMIT,
-    offset: int = 0,
-) -> list[ConversationSummary]:
-    """List an org's conversations, most recently active first (§3, §5.1).
+    cursor: str | None = None,
+) -> ConversationPage:
+    """List an org's conversations, most recently active first by default (§3, §5.1).
 
     Args:
         org_id: Org whose inbox to read (always filtered on -- no cross-org read).
@@ -137,18 +201,33 @@ async def list_conversations(
             lets ``ix_conversations_inbox`` serve the query on its full prefix.
         assigned_user_id: Optional filter for an agent's own inbox
             (``ix_conversations_agent_inbox``).
+        q: Optional search -- matches a customer's display name (``ILIKE``)
+            or any message body in the thread (Postgres full-text, served by
+            the ``ix_messages_fulltext`` GIN index at distribution scale).
+        sort: ``"-last_message_at"`` (default, newest first) or
+            ``"last_message_at"`` (oldest first). Ascending order still uses
+            the DESC-built index for the leading columns but needs an
+            Incremental Sort to reverse the tail; rare enough in practice
+            (agents overwhelmingly want newest-first) to accept.
         limit: Page size, clamped to ``MAX_LIMIT``.
-        offset: Rows to skip.
+        cursor: Opaque continuation token from a previous page's
+            ``next_cursor``. Omit for the first page.
 
     Returns:
-        Conversation summaries, newest activity first.
+        A page of conversation summaries plus ``next_cursor`` (``None`` if
+        this was the last page).
 
     Raises:
         NotFoundError: Caller isn't a member of ``org_id``.
+        InvalidQueryError: Unknown ``sort`` value, or a malformed ``cursor``.
 
     Performance: < 100ms -- one indexed query plus the identity join.
     """
     await _require_member(org_id, user_id)
+
+    if sort not in _SORT_FIELDS:
+        raise InvalidQueryError(f"Unsupported sort {sort!r}; use one of {_SORT_FIELDS}")
+    sort_desc = sort == "-last_message_at"
 
     stmt = (
         select(Conversation, ChannelIdentity)
@@ -159,18 +238,45 @@ async def list_conversations(
         stmt = stmt.where(Conversation.status == status)
     if assigned_user_id is not None:
         stmt = stmt.where(Conversation.assigned_user_id == assigned_user_id)
+    if q:
+        body_match = exists(
+            select(Message.id).where(
+                Message.org_id == org_id,
+                Message.conversation_id == Conversation.id,
+                func.to_tsvector("english", func.coalesce(Message.body_text, "")).op("@@")(
+                    func.plainto_tsquery("english", q)
+                ),
+            )
+        )
+        stmt = stmt.where(or_(body_match, ChannelIdentity.display_name.ilike(f"%{q}%")))
+    if cursor is not None:
+        cursor_ts, cursor_id = _decode_cursor(cursor)
+        stmt = stmt.where(_cursor_predicate(sort_desc=sort_desc, ts=cursor_ts, id_=cursor_id))
 
+    ts_col = Conversation.last_message_at
+    order_col = ts_col.desc() if sort_desc else ts_col.asc()
+    order_id = Conversation.id.desc() if sort_desc else Conversation.id.asc()
     # nullslast(): last_message_at is nullable, and a conversation with no
     # messages yet must not outrank live ones just because NULL sorts high
     # in Postgres' default DESC ordering.
-    stmt = (
-        stmt.order_by(Conversation.last_message_at.desc().nullslast())
-        .limit(_clamp(limit, DEFAULT_CONVERSATION_LIMIT))
-        .offset(max(0, offset))
-    )
+    stmt = stmt.order_by(order_col.nullslast(), order_id)
+
+    page_size = _clamp(limit, DEFAULT_CONVERSATION_LIMIT)
+    stmt = stmt.limit(page_size + 1)
 
     rows = (await session.execute(stmt)).all()
-    return [_summary(conversation, identity) for conversation, identity in rows]
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+
+    next_cursor = None
+    if has_more and rows:
+        last_conversation, _ = rows[-1]
+        next_cursor = _encode_cursor(last_conversation.last_message_at, last_conversation.id)
+
+    return ConversationPage(
+        items=[_summary(conversation, identity) for conversation, identity in rows],
+        next_cursor=next_cursor,
+    )
 
 
 async def get_conversation(
@@ -180,6 +286,7 @@ async def get_conversation(
     user_id: str,
     *,
     limit: int = DEFAULT_MESSAGE_LIMIT,
+    before: str | None = None,
 ) -> ConversationDetail:
     """Read one conversation's thread -- the most recent ``limit`` messages (§3).
 
@@ -192,10 +299,14 @@ async def get_conversation(
         conversation_id: Thread to read.
         user_id: Caller; must be a member of ``org_id`` (any role, §4).
         limit: Max messages, clamped to ``MAX_LIMIT``.
+        before: Opaque cursor from a previous call's ``messages_next_cursor``
+            -- fetches the page of messages immediately older than it, for
+            scrolling back through a long thread. Omit for the newest page.
 
     Raises:
         NotFoundError: Caller isn't a member of ``org_id``.
         ConversationNotFoundError: No such conversation *for this org*.
+        InvalidQueryError: ``before`` doesn't decode to a valid cursor.
 
     Performance: < 200ms -- indexed thread read plus one batched attachment
     query and locally-signed URLs.
@@ -214,13 +325,30 @@ async def get_conversation(
             f"Conversation {conversation_id!r} has no customer identity"
         )
 
-    message_stmt = (
-        select(Message)
-        .where(Message.org_id == org_id, Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.desc())
-        .limit(_clamp(limit, DEFAULT_MESSAGE_LIMIT))
+    page_size = _clamp(limit, DEFAULT_MESSAGE_LIMIT)
+    message_stmt = select(Message).where(
+        Message.org_id == org_id, Message.conversation_id == conversation_id
     )
-    newest_first = list((await session.execute(message_stmt)).scalars().all())
+    if before is not None:
+        before_ts, before_id = _decode_cursor(before)
+        message_stmt = message_stmt.where(
+            or_(
+                Message.created_at < before_ts,
+                and_(Message.created_at == before_ts, Message.id < before_id),
+            )
+        )
+    message_stmt = message_stmt.order_by(Message.created_at.desc(), Message.id.desc()).limit(
+        page_size + 1
+    )
+
+    fetched = list((await session.execute(message_stmt)).scalars().all())
+    has_more = len(fetched) > page_size
+    newest_first = fetched[:page_size]
+    messages_next_cursor = (
+        _encode_cursor(newest_first[-1].created_at, newest_first[-1].id)
+        if has_more and newest_first
+        else None
+    )
     messages = list(reversed(newest_first))
 
     attachments = await _attachments_for(session, org_id, [m.id for m in messages])
@@ -241,6 +369,7 @@ async def get_conversation(
             )
             for m in messages
         ],
+        messages_next_cursor=messages_next_cursor,
     )
 
 

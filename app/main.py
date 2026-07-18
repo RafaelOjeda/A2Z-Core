@@ -3,6 +3,17 @@
 Mounts the thin Core routers and maps the typed ``CoreError`` hierarchy onto HTTP
 responses (each error carries its own ``status_code``). Services mount their own
 routers here in later phases.
+
+**Versioning (API review, 2026-07-18):** every router except ``health`` is
+mounted under ``/v1`` -- there was previously no version anywhere in the
+surface, so a future breaking change had nowhere to go without shifting
+every existing path out from under already-integrated callers. ``/health``
+stays unversioned: it's an infra liveness probe, not a client-facing
+contract, and load balancers/ECS health checks shouldn't need updating on a
+version bump. Policy: additive changes (new fields, new endpoints) land in
+place under ``/v1``; a breaking change to an existing endpoint's shape mints
+``/v2`` for that router rather than mutating ``/v1`` out from under callers
+(see ``docs/api-reference.md``).
 """
 
 from __future__ import annotations
@@ -20,8 +31,8 @@ log = get_logger("app.main")
 
 app = FastAPI(title="A2Z Core", version="0.1.0")
 app.include_router(health.router)
-app.include_router(core_admin.router)
-app.include_router(omnichannel.router)
+app.include_router(core_admin.router, prefix="/v1")
+app.include_router(omnichannel.router, prefix="/v1")
 
 
 @app.middleware("http")

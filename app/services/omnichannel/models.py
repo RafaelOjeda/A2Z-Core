@@ -140,12 +140,28 @@ class Message(Base):
     ``(channel_type, external_message_id)`` is the webhook-idempotency
     guarantee — providers retry aggressively (§5.6); this unique constraint
     is load-bearing, not incidental.
+
+    ``client_dedup_key`` is the client-side counterpart for outbound sends
+    (API review, 2026-07-18): a caller-supplied ``Idempotency-Key`` on
+    ``POST .../messages`` so a retried request after a dropped response
+    can't double-send. Nullable + a *partial* unique index (only enforced
+    when non-null) rather than widening ``uq_message_idempotency``, so
+    replies sent without a key (the common case, and every pre-existing
+    row) are unaffected.
     """
 
     __tablename__ = "messages"
     __table_args__ = (
         UQ("channel_type", "external_message_id", name="uq_message_idempotency"),
         Index("ix_messages_thread", "conversation_id", "created_at"),
+        Index(
+            "uq_message_client_dedup",
+            "org_id",
+            "conversation_id",
+            "client_dedup_key",
+            unique=True,
+            postgresql_where=text("client_dedup_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -160,6 +176,7 @@ class Message(Base):
     content_type: Mapped[str] = mapped_column(Text, nullable=False, default="text/plain")
     status: Mapped[str] = mapped_column(Text, nullable=False, default="received")
     sent_by_user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    client_dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

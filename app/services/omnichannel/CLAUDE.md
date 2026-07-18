@@ -519,7 +519,7 @@ from app.core.exceptions import CoreError
 class OmniChannelError(CoreError): ...                      # base, 500
 class ChannelAdapterError(OmniChannelError): ...            # 502
 class WebhookSignatureError(OmniChannelError): ...          # 401
-class RoutingError(OmniChannelError): ...                   # 500
+class RoutingError(OmniChannelError): ...                   # 400 (client input; see exceptions.py docstring)
 class CommissionError(OmniChannelError): ...                # 409
 class ConversationNotFoundError(OmniChannelError): ...      # 404
 ```

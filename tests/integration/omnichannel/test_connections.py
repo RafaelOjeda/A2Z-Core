@@ -1,15 +1,236 @@
-"""Tests for resolving an org from a channel's provider account id (§5.6 —
-webhook payloads never carry org_id directly)."""
+"""Tests for channel-connections CRUD, and resolving an org from a channel's
+provider account id (§5.6 — webhook payloads never carry org_id directly)."""
 
 from __future__ import annotations
 
-import pytest
+import json
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
-from app.services.omnichannel import db
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core import clients
+from app.core.exceptions import NotFoundError, SecretNotFoundError
+from app.core.membership import Membership, Role
+from app.services.omnichannel import connections, db, webhooks
 from app.services.omnichannel.connections import resolve_org_by_provider_account
+from app.services.omnichannel.exceptions import (
+    ConnectionNotFoundError,
+    ConnectionValidationError,
+    ForbiddenError,
+)
 from app.services.omnichannel.models import ChannelConnection, ChannelType
 
 pytestmark = pytest.mark.integration
+
+
+def _membership(role: Role, org_id: str = "org-a") -> Membership:
+    return Membership(
+        user_id="admin-1", org_id=org_id, role=role, joined_at=datetime.now(timezone.utc)
+    )
+
+
+def _stub_membership(
+    monkeypatch: pytest.MonkeyPatch, role: Role | None, org_id: str = "org-a"
+) -> None:
+    value = None if role is None else _membership(role, org_id)
+    monkeypatch.setattr(connections, "get_membership", AsyncMock(return_value=value))
+
+
+async def _seed_secret(org_id: str, key: str, value: dict[str, str]) -> None:
+    await clients.run_aws(
+        clients.secretsmanager().create_secret,
+        Name=f"a2z/{org_id}/omnichannel/{key}",
+        SecretString=json.dumps(value),
+    )
+
+
+# --- create_connection ---
+
+
+async def test_create_connection_succeeds_for_admin(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+    await _seed_secret("org-a", "whatsapp-main", {"app_secret": "x"})
+
+    connection = await connections.create_connection(
+        session,
+        "org-a",
+        "admin-1",
+        channel_type="whatsapp",
+        display_name="Acme WhatsApp",
+        provider_account_id="pn-123",
+        credentials_secret_key="whatsapp-main",
+    )
+
+    assert connection.status == "active"
+    assert connection.org_id == "org-a"
+
+
+async def test_create_connection_requires_admin_role(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.MEMBER)
+    await _seed_secret("org-a", "whatsapp-main", {"app_secret": "x"})
+
+    with pytest.raises(ForbiddenError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "admin-1",
+            channel_type="whatsapp",
+            display_name="Acme WhatsApp",
+            provider_account_id="pn-123",
+            credentials_secret_key="whatsapp-main",
+        )
+
+
+async def test_create_connection_requires_membership(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, None)
+
+    with pytest.raises(NotFoundError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "stranger",
+            channel_type="whatsapp",
+            display_name="x",
+            provider_account_id="pn-123",
+            credentials_secret_key="whatsapp-main",
+        )
+
+
+async def test_create_connection_rejects_unregistered_channel_type(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SMS has a full adapter (known-issues.md #1) but is deliberately unregistered."""
+    _stub_membership(monkeypatch, Role.ADMIN)
+
+    with pytest.raises(ConnectionValidationError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "admin-1",
+            channel_type="sms",
+            display_name="Acme SMS",
+            provider_account_id="+15550001111",
+            credentials_secret_key="sms-main",
+        )
+
+
+async def test_create_connection_requires_existing_secret(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+
+    with pytest.raises(SecretNotFoundError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "admin-1",
+            channel_type="whatsapp",
+            display_name="Acme WhatsApp",
+            provider_account_id="pn-123",
+            credentials_secret_key="does-not-exist",
+        )
+
+
+# --- list_connections / get_connection ---
+
+
+async def test_list_connections_scoped_to_org(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN, org_id="org-a")
+    await _seed_secret("org-a", "k1", {"app_secret": "x"})
+    await connections.create_connection(
+        session,
+        "org-a",
+        "admin-1",
+        channel_type="whatsapp",
+        display_name="A",
+        provider_account_id="pn-1",
+        credentials_secret_key="k1",
+    )
+    session.add(
+        ChannelConnection(
+            org_id="org-b",
+            channel_type="whatsapp",
+            display_name="B",
+            provider_account_id="pn-2",
+            credentials_secret_key="k2",
+        )
+    )
+    await session.commit()
+
+    result = await connections.list_connections(session, "org-a", "admin-1")
+
+    assert [c.org_id for c in result] == ["org-a"]
+
+
+async def test_get_connection_cross_org_is_not_found(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = ChannelConnection(
+        org_id="org-b",
+        channel_type="whatsapp",
+        display_name="B",
+        provider_account_id="pn-2",
+        credentials_secret_key="k2",
+    )
+    session.add(other)
+    await session.commit()
+
+    _stub_membership(monkeypatch, Role.ADMIN, org_id="org-a")
+    with pytest.raises(ConnectionNotFoundError):
+        await connections.get_connection(session, "org-a", "admin-1", other.id)
+
+
+# --- disable_connection ---
+
+
+async def test_disable_connection_sets_status(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+    await _seed_secret("org-a", "k1", {"app_secret": "x"})
+    connection = await connections.create_connection(
+        session,
+        "org-a",
+        "admin-1",
+        channel_type="whatsapp",
+        display_name="A",
+        provider_account_id="pn-1",
+        credentials_secret_key="k1",
+    )
+
+    disabled = await connections.disable_connection(session, "org-a", "admin-1", connection.id)
+
+    assert disabled.status == "disabled"
+
+
+async def test_disabled_connection_rejects_inbound_webhooks(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+    await _seed_secret("org-a", "k1", {"app_secret": "wa-app-secret"})
+    connection = await connections.create_connection(
+        session,
+        "org-a",
+        "admin-1",
+        channel_type="whatsapp",
+        display_name="A",
+        provider_account_id="pn-1",
+        credentials_secret_key="k1",
+    )
+    await connections.disable_connection(session, "org-a", "admin-1", connection.id)
+
+    with pytest.raises(ConnectionNotFoundError):
+        await webhooks.handle_webhook(session, "whatsapp", connection.id, b"{}", {})
 
 
 async def test_resolves_known_provider_account() -> None:

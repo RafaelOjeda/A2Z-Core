@@ -32,6 +32,8 @@ publisher (`app/core/events.py`); services own their subscribers (later phases).
 | `message.received` | An inbound message (any channel) is persisted | `org_id`, `conversation_id`, `message_id`, `channel_type` |
 | `message.sent` | An outbound message is successfully sent through its channel adapter | `org_id`, `conversation_id`, `message_id` |
 | `conversation.assigned` | A conversation is claimed, reassigned, or auto-assigned | `org_id`, `conversation_id`, `assigned_user_id`, `assigned_by`, `reason` |
+| `connection.created` | A channel connection is registered (`POST /v1/omnichannel/orgs/{org_id}/connections`) | `org_id`, `connection_id`, `channel_type` |
+| `connection.disabled` | A channel connection is soft-disabled (`DELETE .../connections/{connection_id}`) | `org_id`, `connection_id`, `channel_type` |
 
 `message.*` are published by `app/services/omnichannel/worker.py` as part of the
 inbound/outbound message flow (`app/services/omnichannel/CLAUDE.md` §5.6, Build
@@ -39,7 +41,9 @@ Order Step 5). `conversation.assigned` is published by
 `app/services/omnichannel/routing.py` from every assignment path (Build Order
 Step 6/8); its `assigned_by` is either a user id or a `routing:*` marker (e.g.
 `routing:single_assignee`), and `reason` is one of `claim` / `reassign` /
-`single_assignee`.
+`single_assignee`. `connection.*` are published by
+`app/services/omnichannel/connections.py` (added in the 2026-07-18 API review
+alongside the connections CRUD API).
 
 All fire *after* the Postgres write commits, never before — the database row is
 the source of truth; the event is a notification of it.

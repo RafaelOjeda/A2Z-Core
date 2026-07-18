@@ -58,6 +58,14 @@ class EmailAdapter:
         """Always ``True``: inbound email has no HTTP webhook to sign (§5.2)."""
         return True
 
+    async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str:
+        """Always raises: email has no webhook-subscription handshake to answer
+
+        (inbound email is a service-owned SES receipt pipeline, §5.2 -- same
+        reasoning as ``verify_inbound_signature`` always returning ``True``).
+        """
+        raise ChannelAdapterError("Email has no webhook subscription handshake")
+
     async def normalize_inbound(
         self, raw_payload: dict[str, Any]
     ) -> list[NormalizedInboundMessage]:

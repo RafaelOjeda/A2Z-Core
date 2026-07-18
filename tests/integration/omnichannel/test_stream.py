@@ -175,12 +175,12 @@ async def test_disconnect_predicate_closes_stream() -> None:
 
 
 def test_stream_endpoint_requires_token(client: TestClient) -> None:
-    assert client.get("/omnichannel/orgs/org-a/stream").status_code == 401
+    assert client.get("/v1/omnichannel/orgs/org-a/stream").status_code == 401
 
 
 def test_stream_endpoint_rejects_bad_token(client: TestClient) -> None:
     resp = client.get(
-        "/omnichannel/orgs/org-a/stream", headers={"Authorization": "Bearer not-a-jwt"}
+        "/v1/omnichannel/orgs/org-a/stream", headers={"Authorization": "Bearer not-a-jwt"}
     )
     assert resp.status_code == 401
 
@@ -190,7 +190,7 @@ def test_stream_endpoint_non_member_is_404(
 ) -> None:
     token = make_token("auth0|stranger", "stranger@example.com")
     resp = client.get(
-        "/omnichannel/orgs/some-other-org/stream",
+        "/v1/omnichannel/orgs/some-other-org/stream",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 404

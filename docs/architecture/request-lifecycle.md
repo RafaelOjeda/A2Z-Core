@@ -106,10 +106,10 @@ for what each function can raise.
 Omni-Channel adds two request shapes that don't fit the "HTTP in, HTTP out"
 pattern above:
 
-- **Inbound webhooks** (`POST /omnichannel/webhooks/{channel_type}/{connection_id}`)
+- **Inbound webhooks** (`POST /v1/omnichannel/webhooks/{channel_type}/{connection_id}`)
   — verified and enqueued, not processed synchronously. See
   [message flow](../services/omnichannel/message-flow.md).
-- **The SSE stream** (`GET /omnichannel/orgs/{org_id}/stream`) — a
+- **The SSE stream** (`GET /v1/omnichannel/orgs/{org_id}/stream`) — a
   long-lived streaming response, not a request/response cycle. See
   [routing, presence & realtime](../services/omnichannel/routing-and-realtime.md).
 

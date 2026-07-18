@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import RATE_LIMITS
@@ -27,13 +29,26 @@ def _rate_limit_action(channel_type: str) -> str:
     return f"omnichannel.{channel_type}.send"
 
 
+async def _find_by_dedup_key(
+    session: AsyncSession, org_id: str, conversation_id: str, client_dedup_key: str
+) -> Message | None:
+    stmt = select(Message).where(
+        Message.org_id == org_id,
+        Message.conversation_id == conversation_id,
+        Message.client_dedup_key == client_dedup_key,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def send_reply(
     session: AsyncSession,
     org_id: str,
     conversation_id: str,
     user_id: str,
     body_text: str,
-) -> Message:
+    *,
+    client_dedup_key: str | None = None,
+) -> tuple[Message, bool]:
     """Send an agent's reply in a conversation (§5.6, the outbound half).
 
     Persists the ``Message`` as ``queued`` and enqueues it for the worker;
@@ -45,6 +60,23 @@ async def send_reply(
     Permissions service, and interpreting the role string is this service's
     job). This maps MEMBER -> Agent and GUEST -> Viewer, the closest fit to
     §4's permission grid: everyone except GUEST/Viewer can reply.
+
+    Idempotency (API review, 2026-07-18): if ``client_dedup_key`` is given
+    (from the request's ``Idempotency-Key`` header) and a message already
+    exists for this ``(org_id, conversation_id, client_dedup_key)``, that
+    existing message is returned instead of sending a duplicate -- checked
+    up front so a replay costs no rate-limit budget, and again on a unique-
+    violation to win a race against a second concurrent identical request.
+    Omitting the header preserves the pre-existing at-most-one-check
+    behavior (no dedup lookup, always a fresh send).
+
+    Args:
+        client_dedup_key: Optional caller-supplied idempotency key, unique
+            per ``(org_id, conversation_id)``.
+
+    Returns:
+        ``(message, created)`` -- ``created`` is ``False`` when an existing
+        message was returned instead of a new one being sent.
 
     Raises:
         NotFoundError: Caller isn't a member of ``org_id``.
@@ -72,6 +104,11 @@ async def send_reply(
         )
     channel_type = identity.channel_type
 
+    if client_dedup_key is not None:
+        existing = await _find_by_dedup_key(session, org_id, conversation_id, client_dedup_key)
+        if existing is not None:
+            return existing, False
+
     action = _rate_limit_action(channel_type)
     limits = RATE_LIMITS.get(action)
     if limits is not None:
@@ -94,9 +131,20 @@ async def send_reply(
         content_type="text/plain",
         status="queued",
         sent_by_user_id=user_id,
+        client_dedup_key=client_dedup_key,
     )
     session.add(message)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if client_dedup_key is None:
+            raise
+        # Lost a race: a concurrent identical request committed first.
+        existing = await _find_by_dedup_key(session, org_id, conversation_id, client_dedup_key)
+        if existing is None:
+            raise
+        return existing, False
 
     await queues.enqueue_outbound(org_id=org_id, message_id=message.id)
-    return message
+    return message, True

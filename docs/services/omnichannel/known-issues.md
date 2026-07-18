@@ -19,7 +19,10 @@ webhook parsing) with real logic and a provider decision recorded in
 - No `"omnichannel.sms.send"` entry exists in `app/config.py::RATE_LIMITS`.
 - `models.ChannelType.SMS` exists as an enum value, but no
   `channel_connections` row could ever be created for it through any
-  current API path.
+  current API path — including the connections CRUD API added in the
+  2026-07-18 API review (`POST /v1/omnichannel/orgs/{org_id}/connections`
+  explicitly rejects `channel_type="sms"` with `400
+  ConnectionValidationError`, for exactly this reason).
 
 The service's own design doc (§15, channel scope revision) states "SMS is
 cut from v1" as a deliberate decision — this is consistent with SMS not
@@ -54,7 +57,11 @@ migrations (`0001_initial_schema.py` and `0001_baseline_schema.py`), and
 `alembic upgrade head` against a fresh database is ambiguous (two heads)
 until `0001_initial_schema.py` is removed or merged into the chain. The
 verified, tested chain is `0001_baseline_schema.py` (rev `1bfacee578a4`) →
-`0002_inbox_index_desc_nulls_last.py`.
+`0002_inbox_index_desc_nulls_last.py` → `0003_message_client_dedup_key.py`
+(added in the 2026-07-18 API review, for the `Idempotency-Key` header on
+`POST .../messages`) — target it explicitly
+(`alembic upgrade 0003_message_dedup_key`) rather than `head` until the
+orphan is resolved.
 
 ## 4. RDS Terraform module exists ahead of both phases that would use it
 

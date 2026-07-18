@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundError
 from app.core.membership import Membership, Role
 from app.services.omnichannel import inbox
-from app.services.omnichannel.exceptions import ConversationNotFoundError
+from app.services.omnichannel.exceptions import ConversationNotFoundError, InvalidQueryError
 from app.services.omnichannel.models import (
     ChannelIdentity,
     Conversation,
@@ -108,12 +108,13 @@ async def test_list_returns_org_conversations(
     _stub_membership(monkeypatch)
     await _seed_conversation(session, external_id="1111")
 
-    result = await inbox.list_conversations(session, "org-a", "agent-1")
+    page = await inbox.list_conversations(session, "org-a", "agent-1")
 
-    assert len(result) == 1
-    assert result[0].customer_external_id == "1111"
-    assert result[0].customer_display_name == "Jane"
-    assert result[0].channel_type == "whatsapp"
+    assert len(page.items) == 1
+    assert page.items[0].customer_external_id == "1111"
+    assert page.items[0].customer_display_name == "Jane"
+    assert page.items[0].channel_type == "whatsapp"
+    assert page.next_cursor is None
 
 
 async def test_list_orders_by_most_recent_activity(
@@ -124,9 +125,29 @@ async def test_list_orders_by_most_recent_activity(
     await _seed_conversation(session, external_id="newest", last_message_at=_NOW)
     await _seed_conversation(session, external_id="mid", last_message_at=_NOW - timedelta(hours=1))
 
-    result = await inbox.list_conversations(session, "org-a", "agent-1")
+    page = await inbox.list_conversations(session, "org-a", "agent-1")
 
-    assert [c.customer_external_id for c in result] == ["newest", "mid", "old"]
+    assert [c.customer_external_id for c in page.items] == ["newest", "mid", "old"]
+
+
+async def test_list_ascending_sort(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_membership(monkeypatch)
+    await _seed_conversation(session, external_id="old", last_message_at=_NOW - timedelta(hours=2))
+    await _seed_conversation(session, external_id="newest", last_message_at=_NOW)
+    await _seed_conversation(session, external_id="mid", last_message_at=_NOW - timedelta(hours=1))
+
+    page = await inbox.list_conversations(session, "org-a", "agent-1", sort="last_message_at")
+
+    assert [c.customer_external_id for c in page.items] == ["old", "mid", "newest"]
+
+
+async def test_list_rejects_unknown_sort(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+
+    with pytest.raises(InvalidQueryError):
+        await inbox.list_conversations(session, "org-a", "agent-1", sort="bogus")
 
 
 async def test_list_puts_never_active_conversations_last(
@@ -137,9 +158,22 @@ async def test_list_puts_never_active_conversations_last(
     await _seed_conversation(session, external_id="never", last_message_at=None)
     await _seed_conversation(session, external_id="live", last_message_at=_NOW)
 
-    result = await inbox.list_conversations(session, "org-a", "agent-1")
+    page = await inbox.list_conversations(session, "org-a", "agent-1")
 
-    assert [c.customer_external_id for c in result] == ["live", "never"]
+    assert [c.customer_external_id for c in page.items] == ["live", "never"]
+
+
+async def test_list_puts_never_active_conversations_last_ascending(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NULLS LAST holds in either sort direction -- "never active" always sinks."""
+    _stub_membership(monkeypatch)
+    await _seed_conversation(session, external_id="never", last_message_at=None)
+    await _seed_conversation(session, external_id="live", last_message_at=_NOW)
+
+    page = await inbox.list_conversations(session, "org-a", "agent-1", sort="last_message_at")
+
+    assert [c.customer_external_id for c in page.items] == ["live", "never"]
 
 
 async def test_list_filters_by_status(
@@ -149,9 +183,9 @@ async def test_list_filters_by_status(
     await _seed_conversation(session, external_id="open-1", status="open")
     await _seed_conversation(session, external_id="closed-1", status="closed")
 
-    result = await inbox.list_conversations(session, "org-a", "agent-1", status="open")
+    page = await inbox.list_conversations(session, "org-a", "agent-1", status="open")
 
-    assert [c.customer_external_id for c in result] == ["open-1"]
+    assert [c.customer_external_id for c in page.items] == ["open-1"]
 
 
 async def test_list_filters_by_assignee(
@@ -162,23 +196,122 @@ async def test_list_filters_by_assignee(
     await _seed_conversation(session, external_id="theirs", assigned_user_id="agent-2")
     await _seed_conversation(session, external_id="unassigned")
 
-    result = await inbox.list_conversations(session, "org-a", "agent-1", assigned_user_id="agent-1")
+    page = await inbox.list_conversations(session, "org-a", "agent-1", assigned_user_id="agent-1")
 
-    assert [c.customer_external_id for c in result] == ["mine"]
+    assert [c.customer_external_id for c in page.items] == ["mine"]
 
 
-async def test_list_paginates(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_search_matches_customer_name(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+    await _seed_conversation(session, external_id="1111")  # display_name="Jane"
+    conv2 = await _seed_conversation(session, external_id="2222")
+    identity2 = await session.get(ChannelIdentity, conv2.customer_identity_id)
+    assert identity2 is not None
+    identity2.display_name = "Bob"
+    await session.commit()
+
+    page = await inbox.list_conversations(session, "org-a", "agent-1", q="jane")
+
+    assert [c.customer_external_id for c in page.items] == ["1111"]
+
+
+async def test_list_search_matches_message_body(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+    matching = await _seed_conversation(session, external_id="has-invoice")
+    other = await _seed_conversation(session, external_id="no-match")
+    await _seed_message(
+        session, matching, body="where is my invoice?", created_at=_NOW, external_message_id="m1"
+    )
+    await _seed_message(
+        session, other, body="what's the weather", created_at=_NOW, external_message_id="m2"
+    )
+
+    page = await inbox.list_conversations(session, "org-a", "agent-1", q="invoice")
+
+    assert [c.customer_external_id for c in page.items] == ["has-invoice"]
+
+
+async def test_list_search_is_org_scoped(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+    mine = await _seed_conversation(session, org_id="org-a", external_id="mine")
+    theirs = await _seed_conversation(session, org_id="org-b", external_id="theirs")
+    await _seed_message(
+        session, mine, body="secret sauce", created_at=_NOW, external_message_id="m1"
+    )
+    await _seed_message(
+        session, theirs, body="secret sauce", created_at=_NOW, external_message_id="m2"
+    )
+
+    page = await inbox.list_conversations(session, "org-a", "agent-1", q="secret")
+
+    assert [c.customer_external_id for c in page.items] == ["mine"]
+
+
+async def test_list_cursor_walks_all_pages_without_duplicates_or_gaps(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _stub_membership(monkeypatch)
     for i in range(5):
         await _seed_conversation(
             session, external_id=f"c{i}", last_message_at=_NOW - timedelta(minutes=i)
         )
+    # One never-active conversation -- must still appear, at the very end.
+    await _seed_conversation(session, external_id="never", last_message_at=None)
+
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(10):  # generous bound against an infinite-loop bug
+        page = await inbox.list_conversations(session, "org-a", "agent-1", limit=2, cursor=cursor)
+        seen.extend(c.customer_external_id for c in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    else:
+        pytest.fail("cursor walk did not terminate")
+
+    assert seen == ["c0", "c1", "c2", "c3", "c4", "never"]
+
+
+async def test_list_cursor_stable_under_concurrent_insert(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike offset, a keyset cursor must not skip/repeat rows when a new
+    conversation is inserted between page reads."""
+    _stub_membership(monkeypatch)
+    for i in range(3):
+        await _seed_conversation(
+            session, external_id=f"c{i}", last_message_at=_NOW - timedelta(minutes=i)
+        )
 
     page1 = await inbox.list_conversations(session, "org-a", "agent-1", limit=2)
-    page2 = await inbox.list_conversations(session, "org-a", "agent-1", limit=2, offset=2)
+    assert [c.customer_external_id for c in page1.items] == ["c0", "c1"]
 
-    assert [c.customer_external_id for c in page1] == ["c0", "c1"]
-    assert [c.customer_external_id for c in page2] == ["c2", "c3"]
+    # A brand-new, most-recent conversation arrives after page1 was read.
+    await _seed_conversation(
+        session, external_id="brand-new", last_message_at=_NOW + timedelta(minutes=1)
+    )
+
+    page2 = await inbox.list_conversations(
+        session, "org-a", "agent-1", limit=2, cursor=page1.next_cursor
+    )
+    # Continues strictly after c1, unaffected by the new row landing ahead of it.
+    assert [c.customer_external_id for c in page2.items] == ["c2"]
+    assert page2.next_cursor is None
+
+
+async def test_list_rejects_malformed_cursor(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+
+    with pytest.raises(InvalidQueryError):
+        await inbox.list_conversations(session, "org-a", "agent-1", cursor="not-a-cursor")
 
 
 async def test_list_clamps_limit(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,8 +319,8 @@ async def test_list_clamps_limit(session: AsyncSession, monkeypatch: pytest.Monk
     await _seed_conversation(session)
 
     # Asking for more than MAX_LIMIT must not let a caller drain the org.
-    result = await inbox.list_conversations(session, "org-a", "agent-1", limit=10_000)
-    assert len(result) == 1
+    page = await inbox.list_conversations(session, "org-a", "agent-1", limit=10_000)
+    assert len(page.items) == 1
 
 
 async def test_list_cross_org_isolation(
@@ -197,9 +330,9 @@ async def test_list_cross_org_isolation(
     await _seed_conversation(session, org_id="org-a", external_id="a-customer")
     await _seed_conversation(session, org_id="org-b", external_id="b-customer")
 
-    result = await inbox.list_conversations(session, "org-a", "agent-1")
+    page = await inbox.list_conversations(session, "org-a", "agent-1")
 
-    assert [c.customer_external_id for c in result] == ["a-customer"]
+    assert [c.customer_external_id for c in page.items] == ["a-customer"]
 
 
 async def test_list_requires_membership(
@@ -217,7 +350,7 @@ async def test_viewer_may_read(session: AsyncSession, monkeypatch: pytest.Monkey
     _stub_membership(monkeypatch, role=Role.GUEST)
     await _seed_conversation(session)
 
-    assert len(await inbox.list_conversations(session, "org-a", "viewer-1")) == 1
+    assert len((await inbox.list_conversations(session, "org-a", "viewer-1")).items) == 1
 
 
 # --- get_conversation ---
@@ -263,6 +396,67 @@ async def test_get_returns_tail_of_long_thread(
     detail = await inbox.get_conversation(session, "org-a", conversation.id, "agent-1", limit=2)
 
     assert [m.body_text for m in detail.messages] == ["msg-3", "msg-4"]
+    assert detail.messages_next_cursor is not None
+
+
+async def test_get_messages_next_cursor_absent_on_last_page(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+    conversation = await _seed_conversation(session)
+    await _seed_message(
+        session, conversation, body="only one", created_at=_NOW, external_message_id="m1"
+    )
+
+    detail = await inbox.get_conversation(session, "org-a", conversation.id, "agent-1", limit=50)
+
+    assert detail.messages_next_cursor is None
+
+
+async def test_get_before_cursor_walks_full_thread_without_duplicates(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+    conversation = await _seed_conversation(session)
+    for i in range(5):
+        await _seed_message(
+            session,
+            conversation,
+            body=f"msg-{i}",
+            created_at=_NOW + timedelta(minutes=i),
+            external_message_id=f"m{i}",
+        )
+
+    # Newest page first (reading-order tail), then walk backward with `before`.
+    seen: list[str] = []
+    detail = await inbox.get_conversation(session, "org-a", conversation.id, "agent-1", limit=2)
+    seen = [m.body_text for m in detail.messages] + seen
+    for _ in range(10):
+        if detail.messages_next_cursor is None:
+            break
+        detail = await inbox.get_conversation(
+            session,
+            "org-a",
+            conversation.id,
+            "agent-1",
+            limit=2,
+            before=detail.messages_next_cursor,
+        )
+        seen = [m.body_text for m in detail.messages] + seen
+    else:
+        pytest.fail("before-cursor walk did not terminate")
+
+    assert seen == ["msg-0", "msg-1", "msg-2", "msg-3", "msg-4"]
+
+
+async def test_get_before_malformed_cursor_raises(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch)
+    conversation = await _seed_conversation(session)
+
+    with pytest.raises(InvalidQueryError):
+        await inbox.get_conversation(session, "org-a", conversation.id, "agent-1", before="garbage")
 
 
 async def test_get_includes_signed_attachment_urls(

@@ -34,6 +34,7 @@ from app.services.omnichannel.adapters.types import (
     SendResult,
     SupportedFeatures,
 )
+from app.services.omnichannel.exceptions import ChannelAdapterError
 from app.services.omnichannel.models import MessageStatus
 
 
@@ -53,6 +54,15 @@ class SmsAdapter:
         Email adapter, not a public webhook a forger could hit directly.
         """
         return True
+
+    async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str:
+        """Always raises: SMS has no webhook-subscription handshake to answer
+
+        (inbound arrives via an SNS topic subscription, not a public
+        webhook -- same reasoning as ``verify_inbound_signature`` always
+        returning ``True``).
+        """
+        raise ChannelAdapterError("SMS has no webhook subscription handshake")
 
     async def normalize_inbound(
         self, raw_payload: dict[str, Any]

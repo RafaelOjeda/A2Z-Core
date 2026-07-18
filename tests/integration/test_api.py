@@ -36,7 +36,7 @@ def test_health_ok(client: TestClient) -> None:
 
 
 def test_missing_token_is_401(client: TestClient) -> None:
-    assert client.post("/core/orgs", json={"name": "X"}).status_code == 401
+    assert client.post("/v1/core/orgs", json={"name": "X"}).status_code == 401
 
 
 def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> None:
@@ -44,17 +44,17 @@ def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> 
     h = _auth(token)
 
     # Create org (caller becomes owner).
-    resp = client.post("/core/orgs", json={"name": "Acme"}, headers=h)
+    resp = client.post("/v1/core/orgs", json={"name": "Acme"}, headers=h)
     assert resp.status_code == 201
     org_id = resp.json()["org_id"]
 
     # List members -> just the owner.
-    resp = client.get(f"/core/orgs/{org_id}/members", headers=h)
+    resp = client.get(f"/v1/core/orgs/{org_id}/members", headers=h)
     assert resp.status_code == 200 and len(resp.json()) == 1
 
     # Add a member.
     resp = client.post(
-        f"/core/orgs/{org_id}/members",
+        f"/v1/core/orgs/{org_id}/members",
         json={"user_id": "auth0|sarah", "role": "member"},
         headers=h,
     )
@@ -62,7 +62,7 @@ def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> 
 
     # Change settings.
     resp = client.patch(
-        f"/core/orgs/{org_id}/settings",
+        f"/v1/core/orgs/{org_id}/settings",
         json={"changes": {"timezone": "America/New_York"}},
         headers=h,
     )
@@ -71,7 +71,7 @@ def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> 
 
     # Send a test email.
     resp = client.post(
-        "/core/email/send",
+        "/v1/core/email/send",
         json={
             "org_id": org_id,
             "service_type": "invoicing",
@@ -87,8 +87,10 @@ def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> 
 
 def test_non_member_forbidden(client: TestClient, make_token: Callable[..., str]) -> None:
     owner = make_token("auth0|owner2", "o2@acme.com")
-    org_id = client.post("/core/orgs", json={"name": "Org2"}, headers=_auth(owner)).json()["org_id"]
+    org_id = client.post("/v1/core/orgs", json={"name": "Org2"}, headers=_auth(owner)).json()[
+        "org_id"
+    ]
     # A different user is not a member -> 404 from require_member.
     stranger = make_token("auth0|stranger", "s@x.com")
-    resp = client.get(f"/core/orgs/{org_id}/members", headers=_auth(stranger))
+    resp = client.get(f"/v1/core/orgs/{org_id}/members", headers=_auth(stranger))
     assert resp.status_code == 404

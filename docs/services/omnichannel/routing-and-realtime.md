@@ -48,7 +48,7 @@ produced a row.
 | `claim(session, org_id, conversation_id, user_id)` | Owner/Admin/Agent (not Viewer/GUEST) | Idempotent if caller already owns it; raises `ConversationAlreadyAssignedError` (409) if assigned to someone else |
 | `reassign(session, org_id, conversation_id, actor_user_id, assignee_user_id)` | Owner/Admin only | Validates the new assignee is actually an org member first |
 | `apply_single_assignee_if_configured(session, conversation)` | Called only by the worker, only for a **brand-new** conversation | No-ops unless the org has opted into `single_assignee` routing |
-| `set_routing_config(org_id, actor_user_id, strategy, single_assignee_user_id=None)` | Owner/Admin only | `strategy` must be `"manual"` or `"single_assignee"` — anything else raises `RoutingError` |
+| `set_routing_config(org_id, actor_user_id, strategy, single_assignee_user_id=None)` | Owner/Admin only | `strategy` must be `"manual"` or `"single_assignee"` — anything else raises `RoutingError` (400 — a request-validation failure, not a 500; see `exceptions.py`) |
 
 ### Routing configuration
 
@@ -91,7 +91,7 @@ the worker, so the code is exercised only by its own unit tests today).
 sequenceDiagram
     autonumber
     participant Browser
-    participant Router as GET /omnichannel/orgs/{org_id}/stream
+    participant Router as GET /v1/omnichannel/orgs/{org_id}/stream
     participant Auth as core.auth / core.membership
     participant Stream as stream.py
     participant Redis

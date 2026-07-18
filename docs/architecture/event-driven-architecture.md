@@ -21,7 +21,7 @@ either.
 flowchart LR
     subgraph Producers
         CoreP["a2z.core\n(member.*, email.*, settings.changed)"]
-        OmniP["a2z.omnichannel\n(message.*, conversation.assigned)"]
+        OmniP["a2z.omnichannel\n(message.*, conversation.assigned, connection.*)"]
         InvP["a2z.invoicing (Phase 2, not yet built)\n(invoice.*)"]
     end
     Bus[("EventBridge bus: a2z-bus")]

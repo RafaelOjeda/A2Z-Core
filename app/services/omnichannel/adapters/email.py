@@ -50,7 +50,7 @@ _DELIVERY_STATUS_MAP = {
 class EmailAdapter:
     """Adapts ``core.email`` to the ``ChannelAdapter`` Protocol (§5.2, §7)."""
 
-    supported_features = SupportedFeatures(rich_media=True)
+    supported_features = SupportedFeatures(rich_media=True, requires_credentials=False)
 
     async def verify_inbound_signature(
         self, raw_body: bytes, headers: dict[str, str], secret: str

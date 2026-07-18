@@ -132,3 +132,10 @@ async def test_interpret_delivery_webhook_maps_status(core_status: str, expected
     assert len(updates) == 1
     assert updates[0].external_message_id == "m1"
     assert updates[0].status == expected
+
+
+def test_email_does_not_require_a_stored_credential() -> None:
+    """Email authenticates via the org's verified sending domain, not a
+    core.secrets-backed connection credential (connections.py's self-service
+    branch reads this flag to skip the secret entirely)."""
+    assert adapter.supported_features.requires_credentials is False

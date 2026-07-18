@@ -18,6 +18,10 @@ class SupportedFeatures(BaseModel):
     rich_media: bool = False
     typing_indicators: bool = False
     read_receipts: bool = False
+    # Whether a connection needs a core.secrets-backed credential at all.
+    # True for everything except email, which authenticates via the org's
+    # verified SES sending domain, not a per-connection secret (§5.2).
+    requires_credentials: bool = True
 
 
 class OutboundAttachment(BaseModel):

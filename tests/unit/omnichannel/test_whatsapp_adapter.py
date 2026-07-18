@@ -218,3 +218,9 @@ async def test_interpret_delivery_webhook_maps_statuses() -> None:
     assert updates[0].external_message_id == "wamid.1"
     assert updates[0].status == "delivered"
     assert updates[1].status == "read"
+
+
+def test_whatsapp_requires_a_stored_credential() -> None:
+    """Unlike email, a connection needs a real secret (access_token/app_secret) --
+    connections.py's self-service branch relies on this default staying True."""
+    assert adapter.supported_features.requires_credentials is True

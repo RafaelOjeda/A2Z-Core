@@ -43,6 +43,32 @@ deliverability reputation). Needs a `domain_grace_started_at` field on
 of the Step 2 schema, since it's `core.settings`/`core.email`'s concern, not
 Omni-Channel's Postgres schema.
 
+**Partially implemented (2026-07-18, API review — self-service connect):**
+`core.email.start_domain_verification(org_id, domain, changed_by)` now does
+the SES `verify_domain_identity`/`verify_domain_dkim` calls and hands back
+the actual TXT + 3 CNAME records, and `core.email.get_domain_verification_status`
+polls SES for live status (`GET /core/orgs/{org_id}/domain-verification`) —
+so connecting an email channel (`POST /omnichannel/orgs/{org_id}/connections`
+with `channel_type="email"`) no longer requires an engineer to read the
+verification token off the SES console by hand. **Still not implemented:**
+the 30-day grace-period *enforcement* described above — `send_email` still
+only has the old unconditional dev/test fallback to `_DEFAULT_DOMAIN`
+(non-prod only); there is no `domain_grace_started_at` field yet and no
+production fail-closed path once 30 days pass without a verified domain.
+That's a separate, real change to `send_email`'s hot path and deserves its
+own review rather than riding in on the connect-flow fix.
+
+**Related (2026-07-18): WhatsApp connect is now self-service too.**
+`core.secrets.put_secret` was added (Core unfreeze — `core/secrets.py` was
+read-only before) so `POST /omnichannel/orgs/{org_id}/connections` can
+accept a `credentials` object (the access token etc. a user just typed into
+a form) and store it itself, keyed by the new connection's id. The old path
+— passing a `credentials_secret_key` an engineer already provisioned in
+Secrets Manager out of band — still works and is mutually exclusive with
+`credentials`. Before this, there was no way to connect a WhatsApp number
+without AWS console/CLI access, which doesn't work for a self-service SaaS
+product.
+
 ## 4. Voice transcription budget shape (v1.5)
 
 Not a v1 decision. Voice is out of scope until v1.5 (see §15); leave

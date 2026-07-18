@@ -374,7 +374,39 @@ flowchart TD
     Ctx --> Handler
 ```
 
-### 3.3 Why this stays inside the §14 line
+### 3.3 Reuse first — what existing pieces carry this, and why Cognito stays the identity plane
+
+`core.authz` introduces **zero new infrastructure**: no new table, no new
+AWS service, no new dependency. Every plane rides something that already
+exists and is already tested:
+
+| Need | Reused component (already built) | New code |
+|---|---|---|
+| Identity / token issuance | **Cognito** — user pool, hosted sign-in, JWKS, post-confirmation Lambda, RS256 validation in `core.auth` | none |
+| Who belongs to which org, as what | `core.membership` (DynamoDB `a2z-core-membership`) — the role store that already exists, with its <50ms p99 target | none |
+| Denial trail | `core.audit` (append-only, 7-year TTL) — one more `ActionType` | none |
+| Deny-by-default + ladder ordering | — | the ~150-line `authz.py` |
+| Policy storage | git — `capabilities.py` is code, versioned by PR | one data file per service |
+| Denial alerting (optional) | CloudWatch metric filter on `authz.denied` log lines — same pipeline §11 metrics already use | none |
+
+**Cognito was evaluated for the authorization plane too** — it has three
+native mechanisms, and each was rejected for a specific, recorded reason
+rather than overlooked:
+
+| Cognito feature | What it offers | Why it doesn't fit A2Z |
+|---|---|---|
+| **Cognito Groups** (`cognito:groups` claim) | Pool-wide group membership stamped into the token | Groups are **per user pool**, i.e. per platform — they cannot express *per-org* roles. A2Z's whole model is that one user is `ADMIN` in org A and `GUEST` in org B simultaneously; that fact lives in `core.membership`, keyed `(user_id, org_id)`, and Cognito has no org dimension to hang it on. |
+| **Custom claims via pre-token-generation Lambda** | Bake roles/org list into the JWT at issue time | This *caches authorization inside the identity token* — the exact anti-pattern Zero Trust warns about. A revoked or downgraded member keeps their old role until token expiry (up to an hour). A2Z's per-call `get_membership` lookup makes revocation take effect on the **next request**; trading that away to save a <50ms DynamoDB read is a bad trade, and the doc's §3.6 non-goal ("no roles in the JWT") locks it in. |
+| **Amazon Verified Permissions** (Cedar policies) | AWS-managed, fine-grained policy engine | It is precisely the external "Permissions service" root `CLAUDE.md` §14 forbids: a network hop on every authorization decision, per-request pricing, and a second policy language (Cedar) to keep in sync with the code. A2Z's grids are four roles × a dozen capabilities per service — a dict, not a policy engine problem. Revisit only if customers ever demand custom roles. |
+
+So the division of labor stays what it already is, used to the fullest:
+**Cognito owns plane 1** (identity — signup, sign-in, token issuance, key
+rotation, the post-confirmation trigger), and **`core.membership` owns the
+org/role facts** for planes 2–3. `core.authz` adds no store of its own —
+it is a thin, ordered composition of `core.membership` + `core.audit` that
+already exist.
+
+### 3.4 Why this stays inside the §14 line
 
 | §14 prohibition | `core.authz` |
 |---|---|
@@ -389,7 +421,7 @@ by design**: their Zero Trust story is signatures + idempotency + org
 scoping (§2.2, §2.4), not roles, and pretending otherwise would blur two
 different trust models.
 
-### 3.4 What every service gets for free
+### 3.5 What every service gets for free
 
 - **Deny-by-default**: an endpoint whose capability isn't in the map fails
   closed (and a unit test can assert every routed capability is declared).
@@ -404,7 +436,7 @@ different trust models.
 - **Invoicing (Phase 2) ships its grid in one file on day one** instead of
   re-growing the inline pattern.
 
-### 3.5 Adoption path (if approved)
+### 3.6 Adoption path (if approved)
 
 Follow the established unfreeze protocol, then migrate opportunistically:
 
@@ -427,7 +459,7 @@ Rollback story: because policy is per-service data and the mechanism is
 pure functions over existing Core modules, reverting is deleting one file
 per service and restoring the inline checks — no data migration ever.
 
-### 3.6 Explicit non-goals (so this doesn't grow into what §14 forbids)
+### 3.7 Explicit non-goals (so this doesn't grow into what §14 forbids)
 
 - No per-user permission overrides, no custom roles, no permission storage —
   policy is code, versioned in git, changed by PR.

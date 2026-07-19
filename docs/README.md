@@ -58,7 +58,7 @@ service's design doc and its actual implementation.
 | [`migrations.md`](migrations.md) | DynamoDB's additive-change rules vs. Alembic for Postgres |
 | [`events.md`](events.md) | The current EventBridge event catalog (wire contract) |
 | [`retention.md`](retention.md) | TTL/lifecycle policy per data store |
-| [`zero-trust.md`](zero-trust.md) | Zero Trust policy: trust boundaries, per-service security checklist, hardening roadmap |
+| [`zero-trust.md`](zero-trust.md) | Zero Trust API policy: the per-request verification pipeline, endpoint classes, never-trust rules, per-endpoint checklist |
 | [`cost-notes.md`](cost-notes.md) | AWS cost posture and thresholds to revisit |
 | [`omnichannel-decisions.md`](omnichannel-decisions.md) | Recorded product/engineering decisions for Omni-Channel |
 | [`phase2-invoicing.md`](phase2-invoicing.md) | Kickoff roadmap for the not-yet-built Invoicing service |

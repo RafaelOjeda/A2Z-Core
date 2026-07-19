@@ -139,7 +139,9 @@ trade-off documented in `CLAUDE.md`: one FastAPI process, one deploy unit, no
 service-to-service network auth to build. Services are logically separated by
 Python package boundaries and the "events only" cross-service rule, not by
 network boundaries. Revisit only if Core is ever extracted into its own
-deployable (not currently planned).
+deployable (not currently planned). The forward-looking plan for *how* a
+split would happen — triggers, phases, and what stays unchanged — is
+[microservices-distribution.md](microservices-distribution.md).
 
 ## Repository map
 

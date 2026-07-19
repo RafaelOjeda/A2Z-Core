@@ -210,7 +210,7 @@ constant; these strengthen individual gates:
 | **WAF on the ALB** | Public launch / first abuse | Managed + rate-based rules in front of gate 1; complements, never replaces, app-level auth and rate limiting |
 | **OAuth scopes / fine-grained claims** | First M2M or partner API consumer | Cognito client-credentials flow; gate 3 additionally checks `scope`; still short-lived tokens, still no API keys |
 | **Per-endpoint rate limits keyed by user** | First per-user abuse pattern | Registry gains `user_id`-keyed actions (the `ai.parse` limits already planned for Invoicing are the template) |
-| **mTLS / SigV4 between components** | Any component leaves the process | The moment an API call crosses a network hop between A2Z components, that hop gets authenticated service identity *before* it ships — "it used to be in-process" is not a trust argument |
+| **mTLS / SigV4 between components** | Any component leaves the process (see the [distribution plan](architecture/microservices-distribution.md)) | The moment an API call crosses a network hop between A2Z components, that hop gets authenticated service identity *before* it ships — "it used to be in-process" is not a trust argument |
 | **API Gateway in front of Fargate** | Need for per-client quotas, usage plans, or request signing at the edge | Gains edge throttling/validation; every gate in §2 still runs in-app — the gateway is defense in depth, never the sole check |
 | **Token binding / DPoP** | Compliance or high-value API surface demands proof-of-possession | Tokens bound to client keys; replay of a stolen bearer token stops working |
 

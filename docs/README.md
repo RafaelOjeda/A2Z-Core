@@ -21,6 +21,7 @@ module or service you're actually touching.
 | [`architecture/data-flow.md`](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Redis/Secrets Manager, and how org-scoping is enforced per store |
 | [`architecture/event-driven-architecture.md`](architecture/event-driven-architecture.md) | EventBridge vs. Redis pub/sub — two mechanisms, when to use which |
 | [`architecture/deployment.md`](architecture/deployment.md) | ECS Fargate control plane vs. Omni-Channel's single-EC2 MVP; what's actually codified vs. planned |
+| [`architecture/microservices-distribution.md`](architecture/microservices-distribution.md) | Forward-looking plan for splitting the monolith into per-service deployables: triggers, phases, Core-as-SDK decision |
 
 ## Core platform layer (`app/core/`)
 

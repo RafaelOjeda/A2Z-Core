@@ -1,275 +1,224 @@
-# Zero Trust Policy for A2Z Services
+# Zero Trust for A2Z APIs
 
-**Status:** Adopted policy. Applies to Core, Omni-Channel, and every future
-service (Invoicing, Appointments, Expenses, …).
-**Audience:** anyone building or reviewing an A2Z service.
-**Related:** [auth & authorization](architecture/auth-and-authorization.md) ·
-[data flow & org-scoping](architecture/data-flow.md) ·
-Design doc §7 (Security Model) · `CLAUDE.md` §4 (conventions) and §14 (scope).
-
----
-
-## 1. What Zero Trust means here
-
-Zero Trust is usually summarized as **"never trust, always verify"**: no
-request, workload, or network location is trusted by default — every access
-is authenticated, authorized, scoped, and audited, every time.
-
-A2Z is a **modular monolith**, not a service mesh, so the classic Zero Trust
-playbook (mTLS between microservices, per-service network identity) doesn't
-map one-to-one. That's fine — Zero Trust is about *where you draw trust
-boundaries and how you verify at them*, not about a specific topology. A2Z's
-real boundaries are:
-
-| Boundary | What crosses it | Verified by |
-|---|---|---|
-| Internet → API | User HTTP requests | Cognito JWT signature check on **every** request |
-| Internet → webhooks/SNS | Channel webhooks, SES notifications | Signature/secret validation + idempotent handlers |
-| App → AWS data plane | DynamoDB/S3/SES/EventBridge/Secrets Manager calls | IAM task-role policies (least privilege, no static keys) |
-| Tenant → tenant | Nothing, ever | `org_id` scoping on every data access (§3) |
-| Service → service (in-process) | Python imports of `core/` | Deliberately trusted — see §5 for the compensating controls |
-| Service → service (cross-domain) | EventBridge events only | Bus policy + org-scoped event payloads |
-
-The rest of this document states the policy at each boundary, then gives the
-**per-service checklist** (§6) that makes the model scale: a new service that
-satisfies the checklist inherits the whole posture without inventing any
-security machinery of its own.
+**Status:** Adopted policy. Applies to the entire HTTP surface — `/health`,
+`/v1/core/*`, `/v1/omnichannel/*` (including webhooks and the SSE stream) —
+and to every router any future service (Invoicing, Appointments, …) mounts.
+**Audience:** anyone adding, changing, or reviewing an API endpoint.
+**Related:** [API reference](api-reference.md) ·
+[request lifecycle](architecture/request-lifecycle.md) ·
+[auth & authorization](architecture/auth-and-authorization.md) ·
+Design doc §7 (Security Model).
 
 ---
 
-## 2. Principle 1 — Verify identity explicitly, on every request
+## 1. The principle
 
-**Policy:** No request is processed on the strength of where it came from.
-Identity is proven cryptographically per request.
+**Every API call is hostile until it proves otherwise.** No request earns
+trust from where it came from (IP, VPC, ALB), from a previous request on the
+same connection, from being "internal", or from looking well-formed. Each
+call must independently pass authentication, authorization, input
+validation, and rate limiting before any business logic runs — and the
+default for anything that skips a step is **deny**, not allow.
 
-- Every authenticated endpoint validates the Cognito JWT **signature** against
-  the cached JWKS (`core/auth.py`). Tokens are never trusted because a
-  previous request from the same connection was valid; there are no sessions
-  with ambient authority.
-- Claims (`sub`, `email`) come only from a verified token. Nothing
-  user-supplied (headers, body fields) is ever treated as identity.
-- Machine entry points are verified too:
-  - SNS → `ses_notifications` Lambda: message authenticity is checked and the
-    handler is idempotent, so a replayed or duplicated delivery cannot
-    escalate into duplicate state changes.
-  - Channel webhooks (Omni-Channel and future services): each adapter must
-    verify the provider's signature/shared secret before parsing the payload.
-    An unverifiable webhook is rejected, not "best-effort processed".
-- Cognito owns credentials. Services never see or store passwords, and the
-  post-confirmation Lambda only maps a verified Cognito identity to a Core
-  user record (`create_user_if_not_exists`, idempotent).
+Concretely, an A2Z endpoint that lacks an auth dependency is a bug, not a
+convenience. The only deliberate exceptions are enumerated in §4, each with
+its own verification mechanism.
 
-**For new services:** use `auth.get_current_user_from_request` (or the shared
-FastAPI dependency) on every router. Do not add alternative auth paths, API
-keys, or "internal" unauthenticated endpoints. If a service needs
-machine-to-machine ingress (webhooks, schedulers), signature verification is
-part of the adapter, tested like any other code path.
+## 2. The per-request verification pipeline
 
-## 3. Principle 2 — Tenant isolation is micro-segmentation
+Every API call passes through these gates, in order. Each gate is a
+**policy enforcement point** that already exists in the codebase — new
+endpoints compose them; they never reimplement them.
 
-In a multi-tenant platform, the most important segmentation isn't network
-segments — it's **org boundaries**. A2Z's non-negotiable rule (CLAUDE.md §4)
-*is* Zero Trust micro-segmentation applied to data:
+```mermaid
+flowchart LR
+    A[TLS] --> B[request_id]
+    B --> C[AuthN\nJWT verify]
+    C --> D[AuthZ\nmembership + role]
+    D --> E[Input\nvalidation]
+    E --> F[Rate\nlimit]
+    F --> G[Org-scoped\nCore call]
+    G --> H[Audit +\nuniform errors]
+```
 
-- **Every** data access takes an `org_id` and is scoped by it. In DynamoDB the
-  `org_id` is in the partition or sort key; in S3 it's the key prefix; in
-  Redis it's in the key (`ratelimit:{org_id}:{action}`, settings cache keys);
-  in Secrets Manager it's in the secret name; in future Postgres tables it
-  will be a `WHERE org_id = $1` predicate (row-level security when Invoicing
-  lands).
-- `org_id` is never taken from the client at face value for authorization:
-  the request's user must have a **membership** in that org
-  (`core.membership.get_membership(sub, org_id)`), and role checks
-  (`role in {OWNER, ADMIN}`) gate mutations. A valid token for org A grants
-  exactly nothing in org B.
-- Event payloads always carry `org_id` so subscribers scope their own
-  processing — an event is a claim about one org, never a cross-tenant
-  instruction.
+| # | Gate | Enforced by | Failure |
+|---|---|---|---|
+| 1 | **Transport** — HTTPS only; plaintext never reaches a router | ALB / infra | connection refused |
+| 2 | **Correlation** — every request gets an `X-Request-Id`, threaded through all logs | `request_id_middleware` (`app/main.py`) | n/a (always applied) |
+| 3 | **Authentication** — bearer JWT signature verified against Cognito JWKS on *this* request; claims come only from the verified token | `CurrentUser` dependency → `core.auth.get_current_user_from_request` | 401 |
+| 4 | **Authorization** — caller's membership in the *path's* `org_id` is resolved fresh; role gates on mutations | `require_member` / `require_admin` (`app/dependencies.py`) | 404 / 403 |
+| 5 | **Input validation** — Pydantic v2 models define the contract; anything that doesn't parse is rejected before logic runs | typed request models per route | 422 |
+| 6 | **Rate limiting** — abusable actions are limited per org/action via the config-driven registry | `core.rate_limit.check_and_increment` | 429 + `Retry-After` |
+| 7 | **Scoped execution** — the handler calls typed Core/service functions that require `org_id`; there is no raw-table escape hatch | `core/` API design | — |
+| 8 | **Evidence** — mutations write to the append-only audit log; errors return the uniform `{detail, error}` shape with no stack traces or internals leaked | `core.audit.log_audit`, single `CoreError` handler | — |
 
-**Verification, not intention:** every Core module (and every service module
-that touches data) ships a test proving cross-org access fails. This is an
-exit criterion, not a nice-to-have — see [testing.md](testing.md). A PR that
-adds a data access path without a cross-org test is incomplete.
+Two properties make this Zero Trust rather than perimeter security:
 
-## 4. Principle 3 — Least privilege for workloads, no standing secrets
+- **No ambient authority.** Gate 3 runs on every request — there are no
+  sessions, no "already authenticated" connections, no trusted source IPs.
+  A token is the only thing that establishes identity, and it is
+  cryptographically verified each time.
+- **Authorization binds to the verified identity and the requested
+  resource.** Gate 4 checks *this* user against *this* `org_id` from the
+  path. An `org_id` appearing in a request body is never used for an
+  authorization decision unless it's the same one the membership check ran
+  against — a valid token for org A grants exactly nothing in org B, and
+  non-membership returns 404 (the org's existence is not confirmed to
+  outsiders).
 
-**Policy:** Workloads authenticate to AWS via short-lived, role-based
-credentials scoped to exactly what they need. No long-lived keys exist.
+## 3. Token policy
 
-- ECS tasks and Lambdas use **IAM task/execution roles** (`infra/modules/iam`).
-  There are no AWS access keys in code, images, or environment variables.
-- IAM policies name specific resources (the Core tables, the bucket, the
-  `a2z-bus`), not `Resource: "*"`. When a new service adds a table or queue,
-  its ARN is added to policy explicitly via Terragrunt — access is granted by
-  diff, reviewed like code.
-- Per-org third-party credentials (channel tokens, API keys) live in
-  **Secrets Manager**, fetched through `core/secrets.py` (org-scoped names,
-  Redis-cached with TTL). Services never persist them to their own stores,
-  never log them, and never accept them via config files.
-- Application config that isn't secret comes from env/config
-  ([configuration.md](configuration.md)); anything secret goes through
-  Secrets Manager. `.env.example` documents variables without values.
+- **RS256 Cognito JWTs** in every real environment; signature verified
+  against the JWKS (cached 24h — key material, not auth decisions, is what's
+  cached). HS256 test tokens (`core.auth.create_test_token`) exist only for
+  local/test environments and must never validate in production
+  configuration.
+- Tokens are **short-lived access tokens**. Services never handle refresh
+  tokens, never mint tokens, and never persist tokens anywhere (logs
+  included — logging a JWT is a policy violation, see `CLAUDE.md` §4).
+- Claims used downstream (`sub`, `email`) come exclusively from the verified
+  token. No identity from headers, cookies, query params, or body fields.
+- **No API keys.** There is no long-lived static credential that grants API
+  access. When machine-to-machine callers arrive (partner integrations,
+  service accounts), they get short-lived tokens via Cognito
+  client-credentials/OAuth scopes — not a `X-Api-Key` header (§7).
 
-**For new services:** you get a resource, you get a policy line — nothing
-more. If Invoicing needs its Postgres tables and a Bedrock model, its role
-says so and says nothing about Omni-Channel's SQS queues. Prefer separate
-IAM roles per task family (web vs. worker vs. Lambda) as they split, so blast
-radius shrinks as the system grows.
+## 4. Endpoint classes and how each proves itself
 
-## 5. Principle 4 — Assume breach: trusted zones are small, explicit, and compensated
+Different API classes have different callers, but none is exempt — each has
+a verification mechanism suited to its caller.
 
-Zero Trust doesn't mean zero trusted zones; it means every trusted zone is a
-**deliberate, documented decision** with compensating controls.
+### 4.1 Interactive user APIs (`/v1/core/*`, most of `/v1/omnichannel/*`)
 
-A2Z's one big trusted zone is the **in-process boundary**: services import
-`core/` directly, and CLAUDE.md §14 explicitly declines service-to-service
-network auth while everything runs in one process. That is the right
-trade-off for a monolith — a forged "caller identity" inside a single Python
-process is meaningless anyway. The compensating controls are:
+The standard pipeline (§2), end to end. Per-route authorization is explicit
+in the [API reference](api-reference.md) tables — every route documents *who*
+may call it (any authenticated user / member / OWNER-ADMIN). A route whose
+auth column can't be filled in isn't ready to merge.
 
-1. **Org-scoping at the data layer** (§3): even a buggy or compromised code
-   path inside the process cannot express a cross-tenant query, because the
-   APIs require `org_id` and the storage keys embed it.
-2. **Typed, narrow Core APIs**: services can only do what `core/` functions
-   allow — there is no "raw table handle" escape hatch. Core never imports
-   from `services/`, so a service can't widen Core's behavior from outside.
-3. **Events as the only cross-service channel**: services never import each
-   other. A compromised or buggy service can emit events, but subscribers
-   validate and re-scope on their side.
-4. **Audit everything that mutates** (§7): lateral movement inside the
-   process still leaves a trail.
+### 4.2 Inbound webhooks (`/v1/omnichannel/webhooks/{channel_type}/{connection_id}`)
 
-**Re-evaluation trigger (write this into any extraction plan):** the moment
-any component leaves the process — Core extracted to its own deployable, a
-service split out, a second task family calling another over the network —
-that hop becomes an untrusted boundary and gets authenticated
-service-to-service identity (SigV4, IAM-auth on the transport, or mTLS via
-service mesh) *before* it ships, not after. "It used to be in-process" is
-not a trust argument.
+Webhooks can't carry a user JWT, so they prove themselves differently — and
+the bar is the same height:
 
-Network posture backs this up even in the monolith:
+- **Per-connection cryptographic verification.** The raw body's signature is
+  verified against the connection's signing secret, fetched org-scoped from
+  Secrets Manager (`core/secrets.py`) via the adapter registry
+  (`webhooks.py`). An unverifiable payload is rejected before parsing —
+  never "best-effort processed".
+- **The route grants nothing by itself.** A webhook only does anything if a
+  *live, org-owned connection* exists for that `connection_id`; deactivating
+  the connection kills its webhook. The URL being guessable is irrelevant —
+  possession of the URL is not a credential.
+- **Idempotent handlers.** Providers redeliver; a replayed webhook must not
+  produce duplicate state changes.
+- Subscription handshakes (`GET`) verify the provider's challenge against
+  the same org-scoped secret bundle.
 
-- Data stores (RDS, ElastiCache) live in private subnets; security groups
-  admit only the app tier. Nothing but the ALB is internet-facing.
-- All external traffic is HTTPS/TLS; AWS service calls are TLS. As traffic
-  grows, add **VPC endpoints** (Gateway for DynamoDB/S3, Interface for
-  SES/EventBridge/Secrets Manager) so data-plane traffic never transits the
-  public internet — this is a Terragrunt change, invisible to application
-  code.
-- Encryption at rest is on for every store (DynamoDB, S3, RDS, ElastiCache,
-  Secrets Manager) via AWS-managed keys; move to customer-managed KMS keys
-  only when a compliance requirement names it.
+**Rule for future services:** any new machine ingress (payment provider
+callbacks for Invoicing, calendar webhooks for Appointments) follows this
+exact pattern — signature verification against an org-scoped secret, before
+parsing, idempotent, with the rejected path tested.
 
-## 6. The scalable part: the per-service Zero Trust contract
+### 4.3 Streaming (`/v1/omnichannel/orgs/{org_id}/stream`)
 
-The reason this model scales is that **services don't implement security —
-they inherit it by construction**, the same way they inherit email and
-storage. A new service (and each existing one, retroactively) must satisfy
-this checklist before it ships. Copy it into the service's kickoff doc and
-check the boxes in the PR that completes each item.
+Long-lived connections don't get long-lived trust: the SSE stream
+authenticates and authorizes at connect time through the same gates 3–4, and
+the subscription itself is org-scoped — the fan-out layer can only deliver
+events for the org the membership check admitted. A revoked user's stream
+dies with their next connect; event payloads carry `org_id` so nothing
+cross-tenant can be pushed even by a buggy publisher.
 
-**Identity & authorization**
-- [ ] Every router uses the shared auth dependency; zero unauthenticated
-      endpoints except `/health`.
-- [ ] Every org-scoped endpoint resolves membership via
-      `core.membership.get_membership` and enforces role checks for
-      mutations. The `org_id` used is the one the membership check ran
-      against — never a second, unchecked copy from the payload.
-- [ ] Any webhook/ingress adapter verifies the provider's signature before
-      parsing, and the handler is idempotent.
+### 4.4 Health (`/health`)
 
-**Data**
-- [ ] Every table/key/prefix/secret the service owns embeds `org_id` in its
-      key structure (or RLS predicate for Postgres).
-- [ ] A cross-org isolation test exists for every data-access module and runs
-      in CI.
-- [ ] Retention/TTL is declared in [retention.md](retention.md) at design
-      time — data that shouldn't exist can't be stolen.
+The one deliberately unauthenticated endpoint, and it's built to be safe
+that way: read-only, side-effect-free, and **zero-information** — it returns
+liveness (200/503), not versions, config, table names, or anything an
+attacker can use for reconnaissance. Keep it that way; anything richer
+(dependency diagnostics, build info) goes behind auth.
 
-**Workload**
-- [ ] All AWS access is via the task role; the policy diff names the
-      service's new resources explicitly and grants nothing else.
-- [ ] Third-party credentials go through `core/secrets.py`; none are stored
-      in the service's own tables, env vars, or logs.
-- [ ] The service talks to other services only via EventBridge events, with
-      `org_id` in every payload.
+## 5. Never-trust rules (API anti-patterns)
 
-**Observability**
-- [ ] Every mutation calls `core.audit.log_audit`.
-- [ ] Structured logs carry `request_id`; no JWTs, secrets, message bodies,
-      or unnecessary PII are logged.
-- [ ] Rate limits for the service's expensive/abusable actions are registered
-      in the config-driven registry (`core/rate_limit.py`) — denial of
-      service by one tenant against the platform is a Zero Trust failure too.
+These are the shortcuts that quietly reintroduce perimeter thinking. Each is
+a review-blocking finding:
 
-**Review**
-- [ ] The service's kickoff doc names its trust boundaries and any deliberate
-      trusted zone (with compensating controls), following §5's pattern.
-- [ ] Security review of the checklist happens before first deploy, and again
-      when any boundary changes (new ingress, new store, extraction).
+1. **No unauthenticated endpoints** beyond `/health`. "It's only for
+   testing" and "it's not linked anywhere" are not auth mechanisms.
+2. **No trust by network origin.** No IP allowlists, no
+   `X-Forwarded-For` checks, no "requests from the VPC are internal" —
+   the ALB and the process boundary are availability infrastructure, not
+   identity.
+3. **No magic headers.** No `X-Internal: true`, no shared static header
+   secrets between components. If a caller needs machine identity, it gets
+   a verifiable token or signature (§3, §4.2).
+4. **No authorization from client-supplied org context.** The `org_id` that
+   gates the request is the one `require_member` verified; a second copy in
+   the body must either match it or not exist.
+5. **No auth-decision caching.** Cache key material (JWKS) and reference
+   data (settings), never the outcome of "is this user allowed" across
+   requests.
+6. **No fail-open.** If Secrets Manager, Redis, or DynamoDB is unreachable
+   during a verification step, the request fails closed (5xx), it does not
+   skip the check. A rate limiter outage is the one documented judgment
+   call — if limiting is ever made best-effort, that decision is written
+   down here, not made silently in a handler.
+7. **No error-shape leaks.** All failures return the uniform
+   `{detail, error}` body; 404-for-non-membership hides tenant topology;
+   stack traces and internal identifiers never leave the process.
 
-Because every item is either a Core call, a Terragrunt diff, or a test
-pattern that already exists, the marginal cost per service is near zero —
-which is exactly what makes the policy sustainable across N future services.
+## 6. How this scales to every future service
 
-### Where the existing services stand
+The model scales because **an endpoint's security is composition, not
+implementation**. A new service's router imports the same dependencies
+(`CurrentUser`, `require_member`, `require_admin`), declares Pydantic
+models, registers its rate-limited actions in the config registry, and
+calls org-scoped Core functions — at which point gates 1–8 hold with zero
+service-specific security code. The router stays thin (`CLAUDE.md` §2), so
+there's nowhere for a bypass to hide.
 
-| Item | Core | Omni-Channel |
+**Per-endpoint checklist** — every new or changed route, in the PR
+description:
+
+- [ ] Auth dependency present (`CurrentUser` at minimum), or the endpoint is
+      listed in §4 as a documented exception with its own verification.
+- [ ] Org-scoped routes resolve membership via `require_member` on the
+      path's `org_id`; mutations gate on role.
+- [ ] Request/response bodies are typed Pydantic models; no `dict` request
+      bodies.
+- [ ] Abusable/expensive actions call `rate_limit.check_and_increment` with
+      a registry-defined limit.
+- [ ] Mutations audit-log; nothing sensitive (tokens, secrets, message
+      bodies) is logged.
+- [ ] The route's row in the [API reference](api-reference.md) states its
+      auth requirement.
+- [ ] **Negative tests exist:** no token → 401; wrong-org member → 404/403;
+      malformed body → 422; over the limit → 429. Cross-org denial is the
+      non-negotiable one — it's the API-level face of the platform's
+      org-scoping invariant and runs in CI like any other test.
+
+**Versioning is part of the trust contract:** breaking changes mint a new
+`/vN` rather than mutating `/v1` under integrated callers
+([API reference — versioning](api-reference.md#versioning)). A client that
+validated against a contract keeps the contract.
+
+## 7. Maturity roadmap (trigger-driven)
+
+Adopt each hardening step when its trigger fires — the pipeline in §2 is the
+constant; these strengthen individual gates:
+
+| Step | Trigger | What changes |
 |---|---|---|
-| Per-request JWT verification | ✅ `core/auth.py` | ✅ inherits |
-| Membership + role checks | ✅ | ✅ (role-vocabulary gap documented in [auth doc](architecture/auth-and-authorization.md)) |
-| Org-scoped storage keys | ✅ all tables/prefixes | ✅ (see [data-model.md](services/omnichannel/data-model.md)) |
-| Cross-org isolation tests | ✅ per module (exit criterion) | ✅ |
-| IAM roles, no static keys | ✅ `infra/modules/iam` | ✅ |
-| Secrets via Secrets Manager | ✅ `core/secrets.py` | ✅ consumer |
-| Webhook signature verification | n/a | Per adapter — verify against [known-issues.md](services/omnichannel/known-issues.md) for gaps |
-| Audit on mutations | ✅ | ✅ |
-| Events-only cross-service comms | ✅ publisher | ✅ |
-
-Gaps found when auditing against this table become issues, not silent fixes —
-the point of the checklist is that drift is visible.
-
-## 7. Continuous verification
-
-Zero Trust is a posture you *maintain*, not a milestone:
-
-- **CI enforces the invariants:** cross-org tests, `ruff`, `mypy --strict`,
-  and coverage gates run on every PR ([ci-cd.md](ci-cd.md)). A failing
-  isolation test blocks merge exactly like a failing unit test.
-- **Audit log is the flight recorder:** append-only, org-scoped, 7-year
-  retention. When investigating an incident, the question "what did this
-  identity do, in which org, when" must be answerable from `a2z-core-audit`
-  alone.
-- **CloudWatch is the runtime signal:** structured JSON logs with
-  `request_id`, metrics on auth failures, rate-limit rejections, and
-  suppression hits. Alarms on anomalies (spike in 401/403s, one org's
-  rate-limit rejections) are the cheap early-warning layer — add them as
-  traffic becomes non-trivial.
-- **Policy review cadence:** re-read this document at each phase boundary
-  (Invoicing kickoff, Omni-Channel distribution, any extraction) and whenever
-  a checklist item in §6 changes meaning. Update the doc in the same PR that
-  changes the boundary.
-
-## 8. Maturity roadmap (deliberate, not aspirational)
-
-Adopt hardening when the trigger fires — not before (cost/complexity), not
-after (risk):
-
-| Step | Trigger | Change |
-|---|---|---|
-| VPC endpoints for DynamoDB/S3/SES/EventBridge/Secrets Manager | Steady production traffic | Terragrunt only; no app change |
-| Postgres row-level security | Invoicing's first table | RLS policies + `SET app.org_id` per request, alongside the `WHERE org_id` predicate |
-| Split IAM roles per task family | Worker/web/Lambda diverge in what they touch | Narrower policies per role |
-| WAF on the ALB | Public launch / first abuse | Managed rules + rate-based rules complementing app-level `rate_limit` |
-| Customer-managed KMS keys | A compliance requirement names it | Key policy + rotation |
-| Service-to-service authn (SigV4/mTLS) | **Any** component leaves the process | Mandatory before the split ships (§5) |
-| Per-service suppression/secrets granularity | A real product need | The schemas already reserve the columns |
+| **WAF on the ALB** | Public launch / first abuse | Managed + rate-based rules in front of gate 1; complements, never replaces, app-level auth and rate limiting |
+| **OAuth scopes / fine-grained claims** | First M2M or partner API consumer | Cognito client-credentials flow; gate 3 additionally checks `scope`; still short-lived tokens, still no API keys |
+| **Per-endpoint rate limits keyed by user** | First per-user abuse pattern | Registry gains `user_id`-keyed actions (the `ai.parse` limits already planned for Invoicing are the template) |
+| **mTLS / SigV4 between components** | Any component leaves the process | The moment an API call crosses a network hop between A2Z components, that hop gets authenticated service identity *before* it ships — "it used to be in-process" is not a trust argument |
+| **API Gateway in front of Fargate** | Need for per-client quotas, usage plans, or request signing at the edge | Gains edge throttling/validation; every gate in §2 still runs in-app — the gateway is defense in depth, never the sole check |
+| **Token binding / DPoP** | Compliance or high-value API surface demands proof-of-possession | Tokens bound to client keys; replay of a stolen bearer token stops working |
 
 ---
 
-**The one-line summary:** authenticate every request cryptographically,
-scope every byte to an org, grant workloads only what Terragrunt names,
-treat the in-process boundary as the single documented trusted zone with
-compensating controls, audit every mutation — and make every new service
-inherit all of it through the §6 checklist rather than reimplementing any
-of it.
+**The one-line summary:** every API call — user, webhook, or stream —
+independently proves identity cryptographically, is authorized against the
+exact org and role it targets, is schema-validated and rate-limited before
+logic runs, fails closed, and leaves an audit trail; new services inherit
+all of it by composing the shared dependencies, so the policy's cost per
+endpoint is a checklist, not an implementation.

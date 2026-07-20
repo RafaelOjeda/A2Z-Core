@@ -48,15 +48,12 @@ from app.core import email as core_email
 from app.core import secrets
 from app.core.audit import log_audit
 from app.core.events import publish_event
-from app.core.exceptions import NotFoundError
-from app.core.membership import Role, get_membership
-from app.services.omnichannel import db
+from app.services.omnichannel import access, db
 from app.services.omnichannel.adapters.registry import get_adapter
 from app.services.omnichannel.exceptions import (
     ChannelAdapterError,
     ConnectionNotFoundError,
     ConnectionValidationError,
-    ForbiddenError,
 )
 from app.services.omnichannel.models import ChannelConnection, ChannelType
 
@@ -100,11 +97,10 @@ def to_view(
 
 
 async def _require_admin(org_id: str, actor_user_id: str) -> None:
-    membership = await get_membership(actor_user_id, org_id)
-    if membership is None:
-        raise NotFoundError("Not a member of this org")
-    if membership.role not in (Role.OWNER, Role.ADMIN):
-        raise ForbiddenError("Only Owner/Admin can manage channel connections")
+    await access.require_role(
+        actor_user_id, org_id, access.ADMIN_ROLES,
+        forbidden_message="Only Owner/Admin can manage channel connections",
+    )
 
 
 async def _load(session: AsyncSession, org_id: str, connection_id: str) -> ChannelConnection:

@@ -14,10 +14,9 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import auth, membership
-from app.core.exceptions import NotFoundError
+from app.core import auth
 from app.dependencies import CurrentUser
-from app.services.omnichannel import connections, handlers, inbox, routing, stream
+from app.services.omnichannel import access, connections, handlers, inbox, routing, stream
 from app.services.omnichannel.db import get_session
 from app.services.omnichannel.webhooks import handle_webhook
 from app.services.omnichannel.webhooks import verify_subscription as webhook_verify_subscription
@@ -330,8 +329,7 @@ async def stream_inbox(
     claims = auth.validate_jwt(token or "")
     user_id = claims["sub"]
 
-    if await membership.get_membership(user_id, org_id) is None:
-        raise NotFoundError("Not a member of this org")
+    await access.require_membership(user_id, org_id)
 
     return StreamingResponse(
         stream.stream_events(org_id, user_id, is_disconnected=request.is_disconnected),

@@ -37,9 +37,7 @@ from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.exceptions import NotFoundError
-from app.core.membership import get_membership
-from app.services.omnichannel import media
+from app.services.omnichannel import access, media
 from app.services.omnichannel.exceptions import ConversationNotFoundError, InvalidQueryError
 from app.services.omnichannel.models import (
     ChannelIdentity,
@@ -141,12 +139,6 @@ def _clamp(limit: int, default: int) -> int:
     return min(limit, MAX_LIMIT)
 
 
-async def _require_member(org_id: str, user_id: str) -> None:
-    """Any role may read (§4) -- but a non-member must never see the org at all."""
-    if await get_membership(user_id, org_id) is None:
-        raise NotFoundError("Not a member of this org")
-
-
 def _summary(conversation: Conversation, identity: ChannelIdentity) -> ConversationSummary:
     return ConversationSummary(
         id=conversation.id,
@@ -223,7 +215,7 @@ async def list_conversations(
 
     Performance: < 100ms -- one indexed query plus the identity join.
     """
-    await _require_member(org_id, user_id)
+    await access.require_membership(user_id, org_id)
 
     if sort not in _SORT_FIELDS:
         raise InvalidQueryError(f"Unsupported sort {sort!r}; use one of {_SORT_FIELDS}")
@@ -311,13 +303,9 @@ async def get_conversation(
     Performance: < 200ms -- indexed thread read plus one batched attachment
     query and locally-signed URLs.
     """
-    await _require_member(org_id, user_id)
+    await access.require_membership(user_id, org_id)
 
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None or conversation.org_id != org_id:
-        # Same error either way: whether it doesn't exist or belongs to another
-        # org is itself information we don't hand out.
-        raise ConversationNotFoundError(f"No conversation {conversation_id!r} for org {org_id!r}")
+    conversation = await access.load_conversation(session, org_id, conversation_id)
 
     identity = await session.get(ChannelIdentity, conversation.customer_identity_id)
     if identity is None:
@@ -421,11 +409,9 @@ async def mark_read(
         NotFoundError: Caller isn't a member of ``org_id``.
         ConversationNotFoundError: No such conversation for this org.
     """
-    await _require_member(org_id, user_id)
+    await access.require_membership(user_id, org_id)
 
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None or conversation.org_id != org_id:
-        raise ConversationNotFoundError(f"No conversation {conversation_id!r} for org {org_id!r}")
+    conversation = await access.load_conversation(session, org_id, conversation_id)
 
     conversation.unread_count = 0
     await session.commit()

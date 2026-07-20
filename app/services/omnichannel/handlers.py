@@ -16,12 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import RATE_LIMITS
 from app.core import rate_limit
-from app.core.exceptions import NotFoundError
-from app.core.membership import Role, get_membership
-from app.services.omnichannel import queues
+from app.services.omnichannel import access, queues
 from app.services.omnichannel.exceptions import ConversationNotFoundError, ForbiddenError
-from app.services.omnichannel.models import ChannelIdentity, Conversation, Message
+from app.services.omnichannel.models import ChannelIdentity, Message
 
+# ForbiddenError is re-exported for callers that still do
+# ``from app.services.omnichannel.handlers import ForbiddenError`` (the gate
+# that raises it now lives in ``access``; the import keeps the old path valid).
 __all__ = ["ForbiddenError", "send_reply"]
 
 
@@ -55,11 +56,8 @@ async def send_reply(
     the actual channel send (and marking it ``sent``/``failed``) happens
     asynchronously in ``worker.process_outbound_batch``.
 
-    Note on roles: §4's table uses "Agent"/"Viewer", but ``core.membership``
-    only defines OWNER/ADMIN/MEMBER/GUEST (root CLAUDE.md §14 -- there is no
-    Permissions service, and interpreting the role string is this service's
-    job). This maps MEMBER -> Agent and GUEST -> Viewer, the closest fit to
-    §4's permission grid: everyone except GUEST/Viewer can reply.
+    Note on roles: everyone except a Viewer (GUEST) may reply; the
+    MEMBER -> Agent / GUEST -> Viewer mapping lives in ``access`` (§4).
 
     Idempotency (API review, 2026-07-18): if ``client_dedup_key`` is given
     (from the request's ``Idempotency-Key`` header) and a message already
@@ -87,15 +85,12 @@ async def send_reply(
     Performance target: < 200ms for this handler (persist + enqueue only --
     the actual channel send happens in the worker, §5.6).
     """
-    membership = await get_membership(user_id, org_id)
-    if membership is None:
-        raise NotFoundError("Not a member of this org")
-    if membership.role == Role.GUEST:
-        raise ForbiddenError("Viewers cannot send outbound messages")
+    await access.require_role(
+        user_id, org_id, access.NON_VIEWER_ROLES,
+        forbidden_message="Viewers cannot send outbound messages",
+    )
 
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None or conversation.org_id != org_id:
-        raise ConversationNotFoundError(f"No conversation {conversation_id!r} for org {org_id!r}")
+    conversation = await access.load_conversation(session, org_id, conversation_id)
 
     identity = await session.get(ChannelIdentity, conversation.customer_identity_id)
     if identity is None:

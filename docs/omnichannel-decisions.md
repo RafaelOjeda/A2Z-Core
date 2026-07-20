@@ -1,6 +1,7 @@
 # Omni-Channel — Open Decisions (§14)
 
 > Part of the [documentation index](README.md). See also: [Omni-Channel service docs](services/omnichannel/README.md), [known issues](services/omnichannel/known-issues.md).
+> **Authority:** _record_ — a dated decision/log, not a live description of current code.
 
 Recorded per `app/services/omnichannel/CLAUDE.md` §14, before Step 2 (data
 layer) so the Alembic baseline isn't written against unstated assumptions.

@@ -1,6 +1,7 @@
 # System Architecture Overview
 
 > Part of the [documentation index](../README.md). See also: [request lifecycle](request-lifecycle.md), [auth & authorization](auth-and-authorization.md), [data flow](data-flow.md), [event-driven architecture](event-driven-architecture.md), [deployment](deployment.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## What this system is
 

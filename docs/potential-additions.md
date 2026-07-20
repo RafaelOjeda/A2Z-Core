@@ -1,6 +1,7 @@
 # Potential Additions to A2Z Core
 
 > Part of the [documentation index](README.md). See also: [Core module reference](core/README.md) (what exists today, for contrast with what's proposed here).
+> **Authority:** _record_ — a dated decision/log, not a live description of current code.
 
 This document captures common platform capabilities that are often shared across products and would fit naturally into A2Z Core as the platform layer grows.
 

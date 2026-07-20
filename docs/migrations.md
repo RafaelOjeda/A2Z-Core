@@ -1,6 +1,7 @@
 # Migration Strategy
 
 > Part of the [documentation index](README.md). See also: [Omni-Channel data model](services/omnichannel/data-model.md), [Omni-Channel known issues](services/omnichannel/known-issues.md#3-duplicateorphaned-alembic-migration).
+> **Authority:** _spec_ — normative; code is expected to conform to this.
 
 Two different stores, two different migration mechanisms — DynamoDB is
 schemaless and never runs a formal migration tool; Postgres (Omni-Channel)

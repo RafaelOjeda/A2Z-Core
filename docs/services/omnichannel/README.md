@@ -1,6 +1,7 @@
 # Omni-Channel Service
 
 > Part of the [documentation index](../../README.md). See also: [architecture overview](../../architecture/overview.md), [`app/services/omnichannel/CLAUDE.md`](../../../app/services/omnichannel/CLAUDE.md) (the original build plan — treat this `docs/` tree as the current-state reference; the `CLAUDE.md` as the historical design record).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 

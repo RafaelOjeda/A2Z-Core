@@ -1,5 +1,7 @@
 # Zero Trust for A2Z APIs
 
+> **Authority:** _spec_ — normative; code is expected to conform to this.
+
 **Status:** Adopted policy. Applies to the entire HTTP surface — `/health`,
 `/v1/core/*`, `/v1/omnichannel/*` (including webhooks and the SSE stream) —
 and to every router any future service (Invoicing, Appointments, …) mounts.

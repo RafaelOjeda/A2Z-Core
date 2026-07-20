@@ -1,6 +1,7 @@
 # Scripts & Build Tooling
 
 > Part of the [documentation index](README.md). See also: [deployment architecture](architecture/deployment.md), [`infra/README.md`](../infra/README.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## `scripts/create_local_resources.py`
 
@@ -32,6 +33,29 @@ Every step is idempotent — re-running skips resources that already exist
 are all caught and logged as `.exists` rather than raised). `tests/conftest.py`'s
 `aws` fixture calls this same `main()` inside a `moto.mock_aws()` context for
 every test that needs AWS resources — see [testing](testing.md).
+
+## `scripts/check_docs.py`
+
+The documentation integrity gate — stdlib-only, no project install needed:
+
+```bash
+python -m scripts.check_docs
+```
+
+Two checks, both aimed at doc drift:
+
+1. **Broken relative links** — every `[text](path)` in a tracked Markdown
+   file (excluding `.venv`, caches, etc.) must resolve to a real file.
+   External URLs (`http(s)://`, `mailto:`) and pure `#anchor` links are
+   skipped; this validates paths, not the web or heading anchors.
+2. **INDEX.md registration** — every Markdown file under `docs/` (except
+   `README.md` and `INDEX.md` themselves) must be linked from
+   [`docs/INDEX.md`](INDEX.md), so a new doc can't be added and silently
+   orphaned.
+
+Exits non-zero and prints each problem on failure. Runs as the `docs` job
+in [CI](ci-cd.md#docs); run it locally after adding, moving, or renaming any
+doc.
 
 ## `scripts/build_lambda.sh`
 

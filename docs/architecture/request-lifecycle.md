@@ -1,6 +1,7 @@
 # Request Lifecycle
 
 > Part of the [documentation index](../README.md). See also: [architecture overview](overview.md), [auth & authorization](auth-and-authorization.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 This document traces a single HTTP request from the client through the
 FastAPI app to a Core/service call and back, including the error-mapping

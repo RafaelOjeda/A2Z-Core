@@ -1,6 +1,7 @@
 # Shared Infrastructure (`clients.py`, `logging.py`, `exceptions.py`, `_ddb.py`, `config.py`, `aws_resources.py`)
 
 > Part of the [Core module reference](README.md). See also: [architecture overview](../architecture/overview.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 These are not independent Core modules with their own API surface — they're
 the plumbing every module in [`docs/core/README.md`](README.md) is built on.

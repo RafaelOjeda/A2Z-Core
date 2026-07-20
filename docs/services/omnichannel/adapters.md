@@ -1,6 +1,7 @@
 # Channel Adapters
 
 > Part of the [Omni-Channel service docs](README.md). Source: [`app/services/omnichannel/adapters/`](../../../app/services/omnichannel/adapters/).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 

@@ -1,6 +1,7 @@
 # Omni-Channel API Reference
 
 > Part of the [Omni-Channel service docs](README.md). Source: [`app/routers/omnichannel.py`](../../../app/routers/omnichannel.py). All routes are mounted under `/v1/omnichannel` (see [root API reference: Versioning](../../api-reference.md#versioning)) and require `Authorization: Bearer <jwt>` unless noted; errors follow the [typed `CoreError` convention](../../architecture/request-lifecycle.md#error-handling--one-exception-hierarchy-one-handler).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Webhooks
 

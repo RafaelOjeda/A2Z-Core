@@ -1,5 +1,7 @@
 # Distribution Plan: A2Z as Microservices (Future View)
 
+> **Authority:** _record_ — a dated decision/log, not a live description of current code.
+
 **Status:** Forward-looking plan, **not scheduled work**. The modular
 monolith is the right architecture today
 ([overview — why a monolith](overview.md#why-a-monolith-not-microservices)),

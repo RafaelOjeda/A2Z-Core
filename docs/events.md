@@ -1,6 +1,7 @@
 # Event Catalog
 
 > Part of the [documentation index](README.md). See also: [event-driven architecture](architecture/event-driven-architecture.md) (the mechanism this catalog is the contract for), [`core.events` reference](core/events-module.md), [Omni-Channel message flow](services/omnichannel/message-flow.md).
+> **Authority:** _spec_ — normative; code is expected to conform to this.
 
 Cross-service communication is **events only** (CLAUDE.md §6). Core owns the
 publisher (`app/core/events.py`); services own their subscribers (later phases).

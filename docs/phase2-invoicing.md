@@ -1,6 +1,7 @@
 # Phase 2 — Invoicing Service: Kickoff Roadmap
 
 > Part of the [documentation index](README.md). See also: [architecture overview](architecture/overview.md), [Omni-Channel service docs](services/omnichannel/README.md) (the service this roadmap most overlaps with, since both need Postgres).
+> **Authority:** _record_ — a dated decision/log, not a live description of current code.
 
 > **Status update (post Omni-Channel Phase 3 work):** step 1's Postgres
 > foundation is **partially already in place**, built by Omni-Channel

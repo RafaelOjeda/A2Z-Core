@@ -11,6 +11,10 @@ against these docs.
 [auth & authorization](architecture/auth-and-authorization.md) → whichever
 module or service you're actually touching.
 
+**Looking for something specific?** [`INDEX.md`](INDEX.md) is the flat,
+scannable table of every doc plus a "find it by task" lookup — this page is
+the guided tour, that one is the map.
+
 ## Architecture
 
 | Doc | Covers |

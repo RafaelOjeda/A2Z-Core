@@ -1,6 +1,7 @@
 # Message Flow (Inbound & Outbound)
 
 > Part of the [Omni-Channel service docs](README.md). Source: [`webhooks.py`](../../../app/services/omnichannel/webhooks.py), [`queues.py`](../../../app/services/omnichannel/queues.py), [`worker.py`](../../../app/services/omnichannel/worker.py), [`handlers.py`](../../../app/services/omnichannel/handlers.py).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 This is the highest-stakes hot path in the service: webhook providers retry
 aggressively (Meta's window is ~10s), so at-least-once delivery is the norm

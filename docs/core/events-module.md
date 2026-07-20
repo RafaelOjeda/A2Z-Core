@@ -1,6 +1,7 @@
 # `core.events` — Cross-Service Domain Events (Publisher)
 
 > Part of the [Core module reference](README.md). Source: [`app/core/events.py`](../../app/core/events.py). See also: [event-driven architecture](../architecture/event-driven-architecture.md), [event catalog](../events.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 > **Naming note**: this doc covers the `core.events` *module* (the
 > EventBridge publisher). For the full catalog of event types currently in

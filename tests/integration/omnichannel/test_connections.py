@@ -14,7 +14,7 @@ from app.core import clients, secrets
 from app.core.exceptions import NotFoundError, SecretNotFoundError
 from app.core.membership import Membership, Role
 from app.core.settings import get_org_settings
-from app.services.omnichannel import connections, db, webhooks
+from app.services.omnichannel import access, connections, db, webhooks
 from app.services.omnichannel.connections import resolve_org_by_provider_account
 from app.services.omnichannel.exceptions import (
     ConnectionNotFoundError,
@@ -36,7 +36,9 @@ def _stub_membership(
     monkeypatch: pytest.MonkeyPatch, role: Role | None, org_id: str = "org-a"
 ) -> None:
     value = None if role is None else _membership(role, org_id)
-    monkeypatch.setattr(connections, "get_membership", AsyncMock(return_value=value))
+    # The authz gate resolves membership through ``access`` (its single seam),
+    # so that is where the stub belongs -- not each caller module.
+    monkeypatch.setattr(access, "get_membership", AsyncMock(return_value=value))
 
 
 async def _seed_secret(org_id: str, key: str, value: dict[str, str]) -> None:

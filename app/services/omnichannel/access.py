@@ -25,8 +25,16 @@ from app.core.membership import Membership, Role, get_membership
 from app.services.omnichannel.exceptions import ConversationNotFoundError, ForbiddenError
 from app.services.omnichannel.models import Conversation
 
-# Everyone except a Viewer (GUEST) may send/claim -- the write-but-not-admin tier.
-NON_VIEWER_ROLES: tuple[Role, ...] = (Role.OWNER, Role.ADMIN, Role.MEMBER)
+# Domain vocabulary bridge, expressed once. §4's permission grid uses
+# Owner/Admin/Agent/Viewer, but ``core.membership.Role`` only defines
+# OWNER/ADMIN/MEMBER/GUEST -- so MEMBER *is* "Agent" and GUEST *is* "Viewer".
+# Import these names to refer to a role in the product's own terms rather than
+# re-deriving the mapping (as five modules used to).
+AGENT: Role = Role.MEMBER
+VIEWER: Role = Role.GUEST
+
+# Everyone except a Viewer may send/claim -- the write-but-not-admin tier.
+NON_VIEWER_ROLES: tuple[Role, ...] = (Role.OWNER, Role.ADMIN, AGENT)
 # Owner/Admin only -- channel config, reassignment, routing config.
 ADMIN_ROLES: tuple[Role, ...] = (Role.OWNER, Role.ADMIN)
 

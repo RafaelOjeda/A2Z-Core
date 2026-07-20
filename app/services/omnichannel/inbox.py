@@ -153,6 +153,22 @@ def _summary(conversation: Conversation, identity: ChannelIdentity) -> Conversat
     )
 
 
+def _message_view(message: Message, attachments: list[AttachmentView]) -> MessageView:
+    """Build a message DTO -- the thread-view counterpart to :func:`_summary`."""
+    return MessageView(
+        id=message.id,
+        direction=message.direction,
+        channel_type=message.channel_type,
+        body_text=message.body_text,
+        content_type=message.content_type,
+        status=message.status,
+        sent_by_user_id=message.sent_by_user_id,
+        external_message_id=message.external_message_id,
+        created_at=message.created_at,
+        attachments=attachments,
+    )
+
+
 def _cursor_predicate(*, sort_desc: bool, ts: datetime | None, id_: str) -> ColumnElement[bool]:
     """Continuation predicate for keyset pagination over (last_message_at, id).
 
@@ -342,21 +358,7 @@ async def get_conversation(
     attachments = await _attachments_for(session, org_id, [m.id for m in messages])
     return ConversationDetail(
         conversation=_summary(conversation, identity),
-        messages=[
-            MessageView(
-                id=m.id,
-                direction=m.direction,
-                channel_type=m.channel_type,
-                body_text=m.body_text,
-                content_type=m.content_type,
-                status=m.status,
-                sent_by_user_id=m.sent_by_user_id,
-                external_message_id=m.external_message_id,
-                created_at=m.created_at,
-                attachments=attachments.get(m.id, []),
-            )
-            for m in messages
-        ],
+        messages=[_message_view(m, attachments.get(m.id, [])) for m in messages],
         messages_next_cursor=messages_next_cursor,
     )
 

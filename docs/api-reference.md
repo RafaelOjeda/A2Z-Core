@@ -1,6 +1,7 @@
 # HTTP API Reference
 
 > Part of the [documentation index](README.md). See also: [request lifecycle](architecture/request-lifecycle.md), [Omni-Channel API reference](services/omnichannel/api-reference.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 `app/main.py` mounts three routers. All are **thin** — they parse the
 request and call into `core`/service code (`CLAUDE.md` §2); no business
@@ -40,6 +41,7 @@ sending email directly against Core.
 | `/v1/core/orgs/{org_id}/settings` | GET | member (any role) | Returns `OrgSettings` |
 | `/v1/core/orgs/{org_id}/settings` | PATCH | OWNER/ADMIN | `{"changes": dict}` |
 | `/v1/core/email/send` | POST | member of `body.org_id` | `{org_id, service_type, to, subject, body_html, body_text?, metadata?}` → `EmailResult` |
+| `/v1/core/orgs/{org_id}/domain-verification` | GET | member (any role) | Polls SES's live verification status for the org's configured sending domain → `{"status": "Pending"｜"Success"｜"Failed"｜"TemporaryFailure"｜"NotStarted"}`. Backs a "connect your channel" UI ([`core.email.get_domain_verification_status`](core/email.md)) |
 
 ## `routers/omnichannel.py` — prefix `/v1/omnichannel`
 

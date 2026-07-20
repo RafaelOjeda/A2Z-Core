@@ -1,6 +1,7 @@
 # `core.email` — Multi-Tenant Email via SES
 
 > Part of the [Core module reference](README.md). Source: [`app/core/email.py`](../../app/core/email.py). See also: [data flow](../architecture/data-flow.md), [event-driven architecture](../architecture/event-driven-architecture.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 
@@ -62,12 +63,26 @@ sequenceDiagram
 | `resolve_org_for_message` | `(message_id) -> str \| None` | Used by the SNS Lambda to scope a bounce back to its org |
 | `get_suppression_list` | `(org_id) -> dict[str, list[str]]` | `{"bounced": [...], "complained": [...]}`. < 100ms |
 | `unsuppress_email` | `(org_id, email) -> None` | Removes an address from suppression; logs `EMAIL_UNSUPPRESSED` |
+| `start_domain_verification` | `(org_id, domain, changed_by) -> DomainVerificationRecords` | Self-service SES domain + DKIM verification. Saves `domain` on the org's settings immediately, returns the DNS records (one TXT, three DKIM CNAMEs) the org must add. Idempotent. < 500ms |
+| `get_domain_verification_status` | `(org_id) -> str` | Live SES `VerificationStatus` (`Pending`/`Success`/`Failed`/`TemporaryFailure`), or `NotStarted` if no domain configured. Deliberately uncached. < 300ms |
+
+`start_domain_verification` is what powers self-service onboarding: instead
+of an engineer verifying a domain in the SES console, a "connect your
+channel" flow (e.g. Omni-Channel's [`connections.py`](../../app/services/omnichannel/connections.py))
+calls it and shows the returned DNS records to the org's admin, then polls
+`get_domain_verification_status` until it flips to `Success`. Sending
+against a still-unverified domain fails at SES, not here.
 
 `ServiceType` enum: `INVOICING`, `OMNICHANNEL`, `APPOINTMENTS`, `EXPENSES` —
 the sender address is always `{service_type}@{domain}`.
 
 `EmailStatus` enum: `QUEUED`, `SENT`, `DELIVERED`, `BOUNCED`, `COMPLAINED`,
 `REJECTED`.
+
+`DomainVerificationRecords` dataclass (returned by
+`start_domain_verification`): `domain`, `verification_txt_name`,
+`verification_txt_value`, `dkim_cname_records: list[DkimRecord]`, where
+`DkimRecord` is `{name, value}`.
 
 ## Configuration
 
@@ -131,7 +146,9 @@ below).
 - **Local/dev-only domain auto-verification**: outside prod, `send_email`
   calls `verify_domain_identity` before sending so sends succeed against
   moto/LocalStack without a manual step. In prod this never runs — the
-  org's domain is verified once at onboarding, not on every send.
+  org's domain is verified once at onboarding via
+  `start_domain_verification` (which returns the DNS records the org adds),
+  not on every send.
 - `_DEFAULT_DOMAIN = "example.com"` is the fallback sender domain for an
   org that hasn't configured its own — see
   [`docs/omnichannel-decisions.md`](../omnichannel-decisions.md) decision

@@ -377,6 +377,21 @@ Added to the module table in §3, full suite re-run green (83 tests, 94% core
 coverage, `ruff` + `mypy --strict` clean), Core re-frozen. No other module was
 touched.
 
+**Current state (updated 2026-07-20):** Phase 3 Omni-Channel is now
+substantially built — not future work. It has a mounted router
+(`/v1/omnichannel`, see `docs/api-reference.md` and
+`docs/services/omnichannel/`), channel adapters (email/SMS/WhatsApp),
+Alembic migrations, and its own test tree. Two deliberate, self-service-driven
+Core additions landed since the 07-08 re-freeze and are the current Core API
+surface: `core.secrets.put_secret` (write path) and
+`core.email.start_domain_verification` / `get_domain_verification_status`
+(per-org SES domain onboarding, exposed at
+`GET /v1/core/orgs/{org_id}/domain-verification`). Whole-repo suite now
+collects **286 tests** (the "81/83 tests" figures above are Core-only
+historical snapshots, left as-is). The authoritative current-state reference
+for anything under `docs/` is that tree, not this build log — see
+`docs/README.md`.
+
 ---
 
 ## 16. Pointers

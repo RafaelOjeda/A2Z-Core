@@ -1,14 +1,17 @@
 # `core.secrets` — Per-Org/Per-Service Credentials
 
 > Part of the [Core module reference](README.md). Source: [`app/core/secrets.py`](../../app/core/secrets.py). See also: [data flow](../architecture/data-flow.md), [Omni-Channel adapters](../services/omnichannel/adapters.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 
-Read-only access to per-org, per-service credentials stored in AWS Secrets
-Manager (e.g. an org's WhatsApp Business API token), cached in Redis using
-the same idiom `core.settings` already established. Added to Core as part of
-the documented "unfreeze protocol" when Omni-Channel needed it (see
-[Core module reference: extending Core](README.md#extending-core)).
+Read and write access to per-org, per-service credentials stored in AWS
+Secrets Manager (e.g. an org's WhatsApp Business API token), cached in Redis
+using the same idiom `core.settings` already established. Added to Core as
+part of the documented "unfreeze protocol" when Omni-Channel needed it (see
+[Core module reference: extending Core](README.md#extending-core)); the
+write path (`put_secret`) followed once channel connect became
+self-service. Rotation is still not Core's concern.
 
 ## Internal architecture
 
@@ -41,12 +44,20 @@ sequenceDiagram
 
 ```python
 async def get_secret(org_id: str, service_type: str, key: str) -> dict[str, Any]
+async def put_secret(org_id: str, service_type: str, key: str, value: dict[str, Any]) -> None
 ```
 
 Secret name convention: `a2z/{org_id}/{service_type}/{key}` — e.g.
 `a2z/acme-jewelry-4f2a1c9d/omnichannel/whatsapp`.
 
-This module **only reads**. Nothing in Core writes or rotates a secret.
+`put_secret` is the **self-service write path** (added 2026-07-18): a
+service's connect-a-channel flow calls it with credentials a user just
+submitted (e.g. a WhatsApp token pasted into a form), so no engineer needs
+AWS console/CLI access to onboard an org. It upserts — a
+`ResourceNotFoundException` on `put_secret_value` falls back to
+`create_secret` — and **invalidates** the Redis cache key on write (rather
+than write-through), so the next `get_secret` repopulates from AWS and
+can't drift from what was stored.
 
 ## Configuration
 
@@ -70,11 +81,14 @@ WhatsApp credential bundle might be
 
 | Error | Status | Raised when |
 |---|---|---|
-| `SecretNotFoundError` | 404 | No secret exists at `a2z/{org_id}/{service_type}/{key}` (`ResourceNotFoundException`/`InvalidRequestException` from Secrets Manager) |
+| `SecretNotFoundError` | 404 | `get_secret` finds no secret at `a2z/{org_id}/{service_type}/{key}` (`ResourceNotFoundException`/`InvalidRequestException` from Secrets Manager) |
+| `SecretsError` | 500 | `put_secret`'s underlying `put_secret_value`/`create_secret` call failed |
 
-Any other `ClientError` from Secrets Manager propagates unwrapped (not
-converted to a `SecretsError`) — a documented gap, not a design choice; see
-Known limitations.
+On the **read** path, any non-"not found" `ClientError` from Secrets
+Manager (throttling, access denied, …) propagates unwrapped rather than as
+a typed `CoreError` — a documented gap, not a design choice; see Known
+limitations. The **write** path (`put_secret`) does wrap failures in
+`SecretsError`.
 
 ## Security considerations
 
@@ -83,11 +97,14 @@ Known limitations.
 - **Org-scoping is in the resource name itself**, not just a query filter —
   the secret name `a2z/{org_id}/{service_type}/{key}` makes a cross-org read
   structurally impossible without also having that org's `org_id` string.
-- **Rotation staleness window, accepted**: this module has no write/rotate
-  path, so whatever rotates a secret is responsible for deleting the Redis
-  cache key (`secret:{org_id}:{service_type}:{key}`) itself. Absent that, a
-  read may be stale for up to 5 minutes after rotation — a documented,
-  accepted trade-off (`app/services/omnichannel/CLAUDE.md` §6.2), not a bug.
+- **Rotation staleness window, accepted**: `put_secret` invalidates the
+  Redis cache key (`secret:{org_id}:{service_type}:{key}`) it wrote, so a
+  read immediately after a write through this module is never stale. But
+  Core has no rotate path — an *external* rotation (someone rotating the
+  secret in AWS directly) is responsible for deleting that cache key itself.
+  Absent that, a read may be stale for up to 5 minutes after such a rotation
+  — a documented, accepted trade-off (`app/services/omnichannel/CLAUDE.md`
+  §6.2), not a bug.
 
 ## Example usage
 
@@ -100,11 +117,11 @@ creds = await secrets.get_secret(org_id, "omnichannel", "whatsapp")
 
 ## Extension points
 
-Any service can call this for any `service_type`/`key` pair — there is no
-registration step. A future admin flow that writes/rotates secrets is
-explicitly out of Core's scope (`CLAUDE.md` §14: no Permissions/admin
-service in Core) and would live in the owning service or a future
-dedicated admin surface.
+Any service can call `get_secret`/`put_secret` for any `service_type`/`key`
+pair — there is no registration step. **Rotation** (scheduled re-issuance of
+a credential) remains explicitly out of Core's scope (`CLAUDE.md` §14: no
+Permissions/admin service in Core) and would live in the owning service or a
+future dedicated admin surface.
 
 ## Known limitations
 

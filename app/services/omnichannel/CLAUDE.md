@@ -1,5 +1,14 @@
 # A2Z Omni-Channel — Service Context & Build Plan (Adapted for A2Z-Core)
 
+> **⚠ Plan vs. code — read `known-issues.md` for the truth.** This is the
+> *build plan*; the code has since diverged from it in a few places (e.g.
+> presence and the SMS adapter are actually built though described here as
+> deferred/cut; some §16 DoD boxes don't match reality). When this document
+> and the code disagree, the code wins, and the disagreements are catalogued
+> in [`docs/services/omnichannel/known-issues.md`](../../../docs/services/omnichannel/known-issues.md).
+> Treat that file as the source of truth for drift before trusting any
+> "deferred"/"cut"/"done" claim below.
+
 > **Read this first.** This file is the self-contained context for building the
 > **Omni-Channel service** inside A2Z-Core: what the product is (§1–§5), how it
 > wires into Core (§6), and how to build it with the libraries this repo

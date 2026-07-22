@@ -41,6 +41,7 @@ sending email directly against Core.
 | `/v1/core/orgs/{org_id}/settings` | GET | member (any role) | Returns `OrgSettings` |
 | `/v1/core/orgs/{org_id}/settings` | PATCH | OWNER/ADMIN | `{"changes": dict}` |
 | `/v1/core/email/send` | POST | member of `body.org_id` | `{org_id, service_type, to, subject, body_html, body_text?, metadata?}` → `EmailResult` |
+| `/v1/core/orgs/{org_id}/domain-verification` | GET | member (any role) | Polls SES's live verification status for the org's configured sending domain → `{"status": "Pending"｜"Success"｜"Failed"｜"TemporaryFailure"｜"NotStarted"}`. Backs a "connect your channel" UI ([`core.email.get_domain_verification_status`](core/email.md)) |
 
 ## `routers/omnichannel.py` — prefix `/v1/omnichannel`
 

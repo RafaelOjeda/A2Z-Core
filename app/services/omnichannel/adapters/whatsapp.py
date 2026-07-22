@@ -64,37 +64,6 @@ class WhatsAppAdapter(MetaGraphAdapter):
         templates=False, rich_media=False, typing_indicators=False, read_receipts=True
     )
 
-    async def verify_inbound_signature(
-        self, raw_body: bytes, headers: dict[str, str], secret: str
-    ) -> bool:
-        """Verify Meta's ``X-Hub-Signature-256`` HMAC-SHA256 over the raw body."""
-        received = _get_header(headers, "X-Hub-Signature-256")
-        if not received:
-            return False
-        expected = _compute_signature(raw_body, secret)
-        return hmac.compare_digest(received, expected)
-
-    async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str:
-        """Answer Meta's webhook-subscription handshake.
-
-        Meta calls ``GET`` with ``hub.mode=subscribe``, ``hub.verify_token``
-        (compared against the ``verify_token`` set alongside ``app_secret``
-        in this connection's secret, when the webhook URL is registered in
-        the Meta App dashboard), and ``hub.challenge`` -- echoed back
-        verbatim as plain text on a match, the one part of this handshake
-        Meta's docs are strict about.
-        """
-        expected_token = credentials.get("verify_token")
-        challenge = params.get("hub.challenge")
-        if (
-            params.get("hub.mode") != "subscribe"
-            or not expected_token
-            or params.get("hub.verify_token") != expected_token
-            or not challenge
-        ):
-            raise ChannelAdapterError("WhatsApp webhook subscription verification failed")
-        return challenge
-
     async def normalize_inbound(
         self, raw_payload: dict[str, Any]
     ) -> list[NormalizedInboundMessage]:

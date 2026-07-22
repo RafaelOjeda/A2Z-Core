@@ -50,19 +50,19 @@ tested, but nothing in the current API surface calls `heartbeat` or
 direct import (as a test does) or by a future caller. Treat presence as
 "built, integrated nowhere yet," not "not built."
 
-## 3. Duplicate/orphaned Alembic migration
+## 3. Duplicate/orphaned Alembic migration — RESOLVED 2026-07-20
 
-See [data model: Migrations](data-model.md#migrations) for the full
-explanation. Summary: `migrations/versions/` contains two independent root
-migrations (`0001_initial_schema.py` and `0001_baseline_schema.py`), and
-`alembic upgrade head` against a fresh database is ambiguous (two heads)
-until `0001_initial_schema.py` is removed or merged into the chain. The
-verified, tested chain is `0001_baseline_schema.py` (rev `1bfacee578a4`) →
-`0002_inbox_index_desc_nulls_last.py` → `0003_message_client_dedup_key.py`
-(added in the 2026-07-18 API review, for the `Idempotency-Key` header on
-`POST .../messages`) — target it explicitly
-(`alembic upgrade 0003_message_dedup_key`) rather than `head` until the
-orphan is resolved.
+The orphaned duplicate root (`0001_initial_schema.py`) was **deleted** on
+2026-07-20. `migrations/versions/` now holds a single linear chain —
+`0001_baseline_schema.py` (rev `1bfacee578a4`) →
+`0002_inbox_index_desc_nulls_last.py` → `0003_message_client_dedup_key.py` —
+so `alembic upgrade head` is unambiguous and was verified end to end against
+a fresh Postgres 16 (`<base>` → `1bfacee578a4` → `0002` → `0003`, 10 tables).
+Nothing had ever been stamped with the orphan's revision (no real AWS/RDS
+apply has happened), so the deletion was safe. See
+[data model: Migrations](data-model.md#migrations). *Historical note: this
+was previously ambiguous (two heads); the workaround was to target
+`alembic upgrade 0003_message_dedup_key` explicitly.*
 
 ## 4. RDS Terraform module exists ahead of both phases that would use it
 

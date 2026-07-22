@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.core.membership import Membership, Role
-from app.services.omnichannel import inbox
+from app.services.omnichannel import access, inbox
 from app.services.omnichannel.exceptions import ConversationNotFoundError, InvalidQueryError
 from app.services.omnichannel.models import (
     ChannelIdentity,

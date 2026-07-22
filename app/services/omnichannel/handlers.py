@@ -76,23 +76,6 @@ async def send_reply(
         ``(message, created)`` -- ``created`` is ``False`` when an existing
         message was returned instead of a new one being sent.
 
-    Idempotency (API review, 2026-07-18): if ``client_dedup_key`` is given
-    (from the request's ``Idempotency-Key`` header) and a message already
-    exists for this ``(org_id, conversation_id, client_dedup_key)``, that
-    existing message is returned instead of sending a duplicate -- checked
-    up front so a replay costs no rate-limit budget, and again on a unique-
-    violation to win a race against a second concurrent identical request.
-    Omitting the header preserves the pre-existing at-most-one-check
-    behavior (no dedup lookup, always a fresh send).
-
-    Args:
-        client_dedup_key: Optional caller-supplied idempotency key, unique
-            per ``(org_id, conversation_id)``.
-
-    Returns:
-        ``(message, created)`` -- ``created`` is ``False`` when an existing
-        message was returned instead of a new one being sent.
-
     Raises:
         NotFoundError: Caller isn't a member of ``org_id``.
         ForbiddenError: Caller's role can't send (Viewer-equivalent, §4).

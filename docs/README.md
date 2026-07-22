@@ -51,6 +51,15 @@ Start at [`services/omnichannel/README.md`](services/omnichannel/README.md).
 one regardless of what you're doing; it documents real drift between the
 service's design doc and its actual implementation.
 
+## Invoicing service (`app/services/invoicing/`) — Phase 2, not yet built
+
+The billing service. Not yet built (`app/services/invoicing/` is a package
+stub), so there is no `docs/services/invoicing/` reference tree yet — that
+lands with the code. The authoritative design lives in the service build plan
+[`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md)
+(data model, HTTP surface, state machine, Core dependency map), with the short
+roadmap in [`phase2-invoicing.md`](phase2-invoicing.md).
+
 ## Cross-cutting references
 
 | Doc | Covers |
@@ -92,6 +101,8 @@ docs/
 ├── architecture/                    # cross-cutting system design + diagrams
 ├── core/                            # one doc per app/core/*.py module
 ├── services/omnichannel/            # one doc per concern of the Omni-Channel service
+│                                    # (services/invoicing/ lands with Phase 2 code;
+│                                    #  design lives in app/services/invoicing/CLAUDE.md)
 ├── api-reference.md, configuration.md, testing.md, ci-cd.md,
 ├── scripts.md, migrations.md        # cross-cutting operational references
 └── events.md, retention.md, cost-notes.md, omnichannel-decisions.md,

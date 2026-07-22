@@ -1,7 +1,7 @@
 # Phase 2 — Invoicing Service: Kickoff Roadmap
 
-> Part of the [documentation index](README.md). See also: [architecture overview](architecture/overview.md), [Omni-Channel service docs](services/omnichannel/README.md) (the service this roadmap most overlaps with, since both need Postgres).
-> **Authority:** _record_ — a dated decision/log, not a live description of current code.
+> Part of the [documentation index](README.md). See also: the **authoritative design doc** [`app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) (detailed data model, HTTP surface, state machine — finalized 2026-07-22), [architecture overview](architecture/overview.md), [Omni-Channel service docs](services/omnichannel/README.md) (the service this roadmap most overlaps with, since both need Postgres).
+> **Authority:** _record_ — a dated decision/log, not a live description of current code. This page is the short roadmap; the detailed, current design lives in [`app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md), which supersedes the build order below where they differ.
 
 > **Status update (post Omni-Channel Phase 3 work):** step 1's Postgres
 > foundation is **partially already in place**, built by Omni-Channel
@@ -45,14 +45,22 @@ Build order, with the Core API each step consumes:
    (`service_type="invoicing"`; S3 key `{org_id}/invoicing/…`, metadata +
    TTL per `docs/retention.md`).
 6. **Send invoice** — `core.email.send_email` (suppression + the 50/hr/org
-   `email.send` rate limit are already enforced inside Core); publish
-   `invoice.sent`.
-7. **AI parse endpoint** — consumes `core.rate_limit.check_and_increment`
-   with the pre-registered `ai.parse` limits in `app/config.py`
-   (30/min/user, 500/day/org).
-8. **Events + isolation** — publish `invoice.created/sent/paid/voided` on
-   `a2z-bus` via `core.events.publish_event` (document in `docs/events.md`);
-   cross-org isolation integration tests mirroring Core's per-module pattern.
+   `email.send` rate limit are already enforced inside Core); status → `sent`.
+7. **Manual payments + isolation** — `record_payment` (invoice-level total/status
+   reconciliation) and `void`; cross-org isolation integration tests mirroring
+   Core's per-module pattern.
+
+> **Scope revised 2026-07-22** (see [`app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) §15).
+> The following, in earlier drafts of this roadmap, are **deferred to Phase 3+**
+> and are **not** part of the v1 build order above:
+> - **EventBridge events** — publishing `invoice.created/sent/paid/voided` on
+>   `a2z-bus` via `core.events.publish_event`. (Omni-Channel anticipates
+>   consuming `invoice.paid`, but there is no producer until this lands.)
+> - **AI-parse endpoint** — the `core.rate_limit` `ai.parse` limits
+>   (30/min/user, 500/day/org) remain pre-registered in `app/config.py`, but the
+>   endpoint itself is cut from v1.
+> - Bulk import, a separate customer entity, per-invoice currency, and
+>   line-item-level payment tracking.
 
 Exit criteria mirror Core's: ruff + mypy --strict clean, >90% coverage on the
 service package, integration scenarios green, cross-org isolation proven, and

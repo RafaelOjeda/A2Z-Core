@@ -10,10 +10,11 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import clients
+from app.core import clients, secrets
 from app.core.exceptions import NotFoundError, SecretNotFoundError
 from app.core.membership import Membership, Role
-from app.services.omnichannel import connections, db, webhooks
+from app.core.settings import get_org_settings
+from app.services.omnichannel import access, connections, db, webhooks
 from app.services.omnichannel.connections import resolve_org_by_provider_account
 from app.services.omnichannel.exceptions import (
     ConnectionNotFoundError,
@@ -35,7 +36,9 @@ def _stub_membership(
     monkeypatch: pytest.MonkeyPatch, role: Role | None, org_id: str = "org-a"
 ) -> None:
     value = None if role is None else _membership(role, org_id)
-    monkeypatch.setattr(connections, "get_membership", AsyncMock(return_value=value))
+    # The authz gate resolves membership through ``access`` (its single seam),
+    # so that is where the stub belongs -- not each caller module.
+    monkeypatch.setattr(access, "get_membership", AsyncMock(return_value=value))
 
 
 async def _seed_secret(org_id: str, key: str, value: dict[str, str]) -> None:
@@ -55,7 +58,7 @@ async def test_create_connection_succeeds_for_admin(
     _stub_membership(monkeypatch, Role.ADMIN)
     await _seed_secret("org-a", "whatsapp-main", {"app_secret": "x"})
 
-    connection = await connections.create_connection(
+    connection, dns_records = await connections.create_connection(
         session,
         "org-a",
         "admin-1",
@@ -67,6 +70,105 @@ async def test_create_connection_succeeds_for_admin(
 
     assert connection.status == "active"
     assert connection.org_id == "org-a"
+    assert dns_records is None
+
+
+async def test_create_connection_self_service_credentials(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SaaS self-service path: no engineer pre-provisions a secret --
+    the org's own submitted credentials are stored by create_connection."""
+    _stub_membership(monkeypatch, Role.ADMIN)
+
+    connection, _ = await connections.create_connection(
+        session,
+        "org-a",
+        "admin-1",
+        channel_type="whatsapp",
+        display_name="Acme WhatsApp",
+        provider_account_id="pn-123",
+        credentials={"access_token": "tok", "phone_number_id": "pn-123", "app_secret": "wa-secret"},
+    )
+
+    assert connection.credentials_secret_key == connection.id
+    stored = await secrets.get_secret("org-a", "omnichannel", connection.id)
+    assert stored == {"access_token": "tok", "phone_number_id": "pn-123", "app_secret": "wa-secret"}
+
+
+async def test_create_connection_rejects_both_credentials_forms(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+    await _seed_secret("org-a", "whatsapp-main", {"app_secret": "x"})
+
+    with pytest.raises(ConnectionValidationError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "admin-1",
+            channel_type="whatsapp",
+            display_name="Acme WhatsApp",
+            provider_account_id="pn-123",
+            credentials={"access_token": "tok"},
+            credentials_secret_key="whatsapp-main",
+        )
+
+
+async def test_create_connection_rejects_no_credentials_form(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+
+    with pytest.raises(ConnectionValidationError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "admin-1",
+            channel_type="whatsapp",
+            display_name="Acme WhatsApp",
+            provider_account_id="pn-123",
+        )
+
+
+async def test_create_email_connection_needs_no_credentials(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Email authenticates via the org's verified sending domain, not a secret."""
+    _stub_membership(monkeypatch, Role.ADMIN)
+
+    connection, dns_records = await connections.create_connection(
+        session,
+        "org-a",
+        "admin-1",
+        channel_type="email",
+        display_name="Support inbox",
+        provider_account_id="support@acme.com",
+    )
+
+    assert connection.credentials_secret_key == ""
+    assert dns_records is not None
+    assert dns_records.domain == "acme.com"
+    assert dns_records.verification_txt_name == "_amazonses.acme.com"
+    assert len(dns_records.dkim_cname_records) == 3
+
+    org = await get_org_settings("org-a")
+    assert org.domain == "acme.com"
+
+
+async def test_create_email_connection_requires_address_form(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_membership(monkeypatch, Role.ADMIN)
+
+    with pytest.raises(ConnectionValidationError):
+        await connections.create_connection(
+            session,
+            "org-a",
+            "admin-1",
+            channel_type="email",
+            display_name="Support inbox",
+            provider_account_id="not-an-address",
+        )
 
 
 async def test_create_connection_requires_admin_role(
@@ -198,7 +300,7 @@ async def test_disable_connection_sets_status(
 ) -> None:
     _stub_membership(monkeypatch, Role.ADMIN)
     await _seed_secret("org-a", "k1", {"app_secret": "x"})
-    connection = await connections.create_connection(
+    connection, _ = await connections.create_connection(
         session,
         "org-a",
         "admin-1",
@@ -218,7 +320,7 @@ async def test_disabled_connection_rejects_inbound_webhooks(
 ) -> None:
     _stub_membership(monkeypatch, Role.ADMIN)
     await _seed_secret("org-a", "k1", {"app_secret": "wa-app-secret"})
-    connection = await connections.create_connection(
+    connection, _ = await connections.create_connection(
         session,
         "org-a",
         "admin-1",

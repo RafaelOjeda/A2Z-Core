@@ -320,7 +320,7 @@ async def test_send_reply_idempotency_key_replay_does_not_duplicate(
     connection = await _seed_connection(session)
     conversation = await _seed_identity_and_conversation(session, connection.org_id)
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership",
+        "app.services.omnichannel.access.get_membership",
         AsyncMock(return_value=_member_stub(connection.org_id)),
     )
 
@@ -347,7 +347,7 @@ async def test_send_reply_without_idempotency_key_is_not_deduped(
     connection = await _seed_connection(session)
     conversation = await _seed_identity_and_conversation(session, connection.org_id)
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership",
+        "app.services.omnichannel.access.get_membership",
         AsyncMock(return_value=_member_stub(connection.org_id)),
     )
 
@@ -382,7 +382,7 @@ async def test_send_reply_idempotency_key_scoped_per_conversation(
     await session.commit()
 
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership",
+        "app.services.omnichannel.access.get_membership",
         AsyncMock(return_value=_member_stub(connection.org_id)),
     )
 

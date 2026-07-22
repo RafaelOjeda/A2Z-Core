@@ -7,7 +7,7 @@ subclasses, mapped to HTTP responses by the global handler in ``app.main``.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import auth
 from app.dependencies import CurrentUser
-from app.services.omnichannel import connections, handlers, inbox, routing, stream
+from app.services.omnichannel import access, connections, handlers, inbox, routing, stream
 from app.services.omnichannel.db import get_session
 from app.services.omnichannel.webhooks import handle_webhook
 from app.services.omnichannel.webhooks import verify_subscription as webhook_verify_subscription
@@ -236,7 +236,12 @@ class ConnectionCreateRequest(BaseModel):
     channel_type: str
     display_name: str
     provider_account_id: str
-    credentials_secret_key: str
+    # Self-service: raw credentials a user just typed in (e.g. a WhatsApp
+    # access_token/phone_number_id/app_secret). Written to core.secrets here
+    # -- no manual AWS step. Mutually exclusive with credentials_secret_key
+    # (an engineer-provisioned secret), and neither is needed for email.
+    credentials: dict[str, Any] | None = None
+    credentials_secret_key: str | None = None
 
 
 @router.post("/orgs/{org_id}/connections", status_code=201)
@@ -246,17 +251,23 @@ async def create_connection(
     user: CurrentUser,
     session: DbSession,
 ) -> connections.ConnectionView:
-    """Register a channel connection for an org (Owner/Admin only, §5.2, §5.6)."""
-    connection = await connections.create_connection(
+    """Register a channel connection for an org (Owner/Admin only, §5.2, §5.6).
+
+    For ``channel_type="email"``, this also kicks off SES domain verification
+    for ``provider_account_id``'s domain -- the response's ``dns_records``
+    carries the TXT/CNAME records the org must add.
+    """
+    connection, dns_records = await connections.create_connection(
         session,
         org_id,
         user["sub"],
         channel_type=body.channel_type,
         display_name=body.display_name,
         provider_account_id=body.provider_account_id,
+        credentials=body.credentials,
         credentials_secret_key=body.credentials_secret_key,
     )
-    return connections.to_view(connection)
+    return connections.to_view(connection, dns_records)
 
 
 @router.get("/orgs/{org_id}/connections")

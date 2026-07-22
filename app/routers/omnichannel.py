@@ -7,7 +7,7 @@ subclasses, mapped to HTTP responses by the global handler in ``app.main``.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import PlainTextResponse, StreamingResponse

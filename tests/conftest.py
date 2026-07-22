@@ -70,3 +70,35 @@ def make_token() -> Callable[..., str]:
         return auth.create_test_token(sub, email)
 
     return _make
+
+
+@pytest.fixture
+async def pg_session():
+    """Provide an async Postgres session for integration tests.
+
+    Creates the invoicing schema and all tables before yielding, then drops
+    everything after the test.
+    """
+    from sqlalchemy import text
+    from app.services.invoicing import db as invoicing_db
+    from app.services.invoicing.models import Base
+
+    # Reset the cached engine/session factory
+    invoicing_db.reset_engine()
+
+    # Create all tables in the invoicing schema
+    async with invoicing_db.engine().begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS invoicing"))
+        await conn.run_sync(Base.metadata.create_all)
+
+    # Yield a session for the test to use
+    async with invoicing_db.get_session_context() as session:
+        yield session
+
+    # Cleanup: drop all tables and schema
+    async with invoicing_db.engine().begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(text("DROP SCHEMA IF EXISTS invoicing"))
+
+    # Reset for next test
+    invoicing_db.reset_engine()

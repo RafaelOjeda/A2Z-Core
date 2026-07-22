@@ -20,6 +20,7 @@ from app.services.invoicing.handlers import (
     get_invoice,
     list_invoices,
     record_payment,
+    send_invoice,
     update_invoice,
     void_invoice,
 )
@@ -159,3 +160,31 @@ async def void_invoice_endpoint(
         return await void_invoice(org_id, invoice_id, user_id, reason)
     except CoreError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))
+
+
+@router.post("/orgs/{org_id}/invoices/{invoice_id}/send", response_model=InvoiceRead)
+async def send_invoice_endpoint(
+    org_id: str,
+    invoice_id: str,
+    recipient_email: str | None = Query(None),
+    request = None,
+) -> InvoiceRead:
+    """Send an invoice via email (generate PDF + email). Requires OWNER or ADMIN.
+
+    Recipient email defaults to the invoice's customer_email if not provided.
+    """
+    user_id, _ = await check_access(org_id, request, required_role="ADMIN")
+
+    # Fetch invoice to get customer email if not provided
+    try:
+        invoice = await get_invoice(org_id, invoice_id)
+        email = recipient_email or invoice.customer_email
+    except CoreError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+    try:
+        return await send_invoice(org_id, invoice_id, user_id, email)
+    except CoreError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

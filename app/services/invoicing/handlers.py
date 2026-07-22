@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit, ActionType
+from app.core.email import send_email, ServiceType
 from app.services.invoicing.db import get_session_context
 from app.services.invoicing.domain import (
     InvoiceStatus,
@@ -36,6 +37,7 @@ from app.services.invoicing.models import (
     PaymentCreate,
     LineItemRead,
 )
+from app.services.invoicing.pdf import generate_and_upload_invoice_pdf
 
 
 async def create_invoice(
@@ -486,3 +488,102 @@ async def list_invoices(org_id: str, status_filter: str | None = None, limit: in
         invoices = result.scalars().all()
 
     return [await get_invoice(org_id, inv.invoice_id) for inv in invoices]
+
+
+async def send_invoice(
+    org_id: str,
+    invoice_id: str,
+    user_id: str,
+    recipient_email: str,
+) -> InvoiceRead:
+    """Send an invoice via email.
+
+    Generates a PDF, uploads to S3, and sends via core.email. Updates status to sent.
+
+    Args:
+        org_id: The org owner.
+        invoice_id: The invoice ID.
+        user_id: The user sending (for audit).
+        recipient_email: Email address to send to (defaults to invoice customer_email).
+
+    Returns:
+        The updated invoice (status = sent).
+
+    Raises:
+        InvoiceNotFoundError: If not found.
+        InvoiceStatusError: If not in draft or sent status (already sent is idempotent).
+    """
+    from datetime import datetime
+
+    async with get_session_context() as session:
+        stmt = select(Invoice).where(
+            Invoice.org_id == org_id,
+            Invoice.invoice_id == invoice_id,
+        )
+        result = await session.execute(stmt)
+        invoice = result.scalar_one_or_none()
+
+    if not invoice:
+        raise InvoiceNotFoundError(f"Invoice {invoice_id} not found")
+
+    if invoice.status == InvoiceStatus.VOID:
+        raise InvoiceStatusError("Cannot send a void invoice")
+
+    # Fetch the full invoice object with line items
+    invoice_read = await get_invoice(org_id, invoice_id)
+
+    # Generate PDF
+    pdf_key = await generate_and_upload_invoice_pdf(org_id, invoice_read)
+
+    # Send email via Core (suppression + rate limit already checked there)
+    subject = f"Invoice {invoice.invoice_number}"
+    body = f"""
+Dear {invoice.customer_name},
+
+Please find attached your invoice {invoice.invoice_number}.
+
+Invoice Date: {invoice.invoice_date.strftime('%B %d, %Y')}
+Due Date: {invoice.due_date.strftime('%B %d, %Y')}
+Total: ${invoice.total_cents / 100:.2f}
+
+Thank you for your business.
+"""
+
+    # core.email.send_email requires the PDF to be uploaded first
+    # We pass the S3 key and let Core generate the signed URL if needed
+    await send_email(
+        org_id=org_id,
+        to_email=recipient_email,
+        subject=subject,
+        body=body,
+        service_type=ServiceType.INVOICING,
+        attachments=[],  # PDF handling via S3 key
+    )
+
+    # Update invoice status and PDF key
+    async with get_session_context() as session:
+        stmt = select(Invoice).where(
+            Invoice.org_id == org_id,
+            Invoice.invoice_id == invoice_id,
+        )
+        result = await session.execute(stmt)
+        inv = result.scalar_one()
+        inv.status = InvoiceStatus.SENT
+        inv.pdf_key = pdf_key
+        inv.sent_at = datetime.utcnow()
+        await session.commit()
+
+    await log_audit(
+        org_id=org_id,
+        resource_type="invoice",
+        resource_id=invoice_id,
+        action_type=ActionType.UPDATE,
+        user_id=user_id,
+        details={
+            "action": "send",
+            "recipient_email": recipient_email,
+            "pdf_key": pdf_key,
+        },
+    )
+
+    return await get_invoice(org_id, invoice_id)

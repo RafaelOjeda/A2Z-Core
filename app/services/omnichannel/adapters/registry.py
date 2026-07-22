@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from app.services.omnichannel.adapters.base import ChannelAdapter
 from app.services.omnichannel.adapters.email import EmailAdapter
+from app.services.omnichannel.adapters.instagram import InstagramAdapter
+from app.services.omnichannel.adapters.messenger import MessengerAdapter
 from app.services.omnichannel.adapters.whatsapp import WhatsAppAdapter
 from app.services.omnichannel.exceptions import ChannelAdapterError
 
 _REGISTRY: dict[str, ChannelAdapter] = {
     "email": EmailAdapter(),
     "whatsapp": WhatsAppAdapter(),
+    "messenger": MessengerAdapter(),
+    "instagram": InstagramAdapter(),
 }
 
 

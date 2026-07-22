@@ -1,6 +1,9 @@
 """WhatsApp channel adapter -- Meta WhatsApp Cloud (Graph) API over httpx.
 
-CLAUDE.md §5.2, §13 Step 4.
+CLAUDE.md §5.2, §13 Step 4. Shares the ``X-Hub-Signature-256`` signature check
+and the ``hub.challenge`` subscription handshake with every other Meta channel
+via ``MetaGraphAdapter`` (``_meta.py``); only the WhatsApp-specific payload
+shapes live here.
 
 v1 scope is deliberately narrow, matching the plan's minimal-scope revision:
 
@@ -25,12 +28,17 @@ org_id-in-credentials convention as ``email.py``.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from typing import Any
 
 import httpx
 
+from app.services.omnichannel.adapters._meta import (
+    GRAPH_API_BASE,
+    MetaGraphAdapter,
+)
+from app.services.omnichannel.adapters._meta import (
+    post_graph_api as _post_graph_api,
+)
 from app.services.omnichannel.adapters.types import (
     DeliveryStatusUpdate,
     NormalizedInboundMessage,
@@ -40,12 +48,14 @@ from app.services.omnichannel.adapters.types import (
 )
 from app.services.omnichannel.exceptions import ChannelAdapterError
 
-_GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
-_HTTP_TIMEOUT = 10.0
 
+class WhatsAppAdapter(MetaGraphAdapter):
+    """Adapts the Meta WhatsApp Cloud API to the ``ChannelAdapter`` Protocol (§5.2, §7).
 
-class WhatsAppAdapter:
-    """Adapts the Meta WhatsApp Cloud API to the ``ChannelAdapter`` Protocol (§5.2, §7)."""
+    Signature verification and the subscription handshake are inherited from
+    ``MetaGraphAdapter``; this class supplies only WhatsApp's own payload
+    shapes.
+    """
 
     # templates=False / rich_media=False are v1 scope, not platform limits --
     # see module docstring. read_receipts=True: Meta's status webhook reports
@@ -54,44 +64,16 @@ class WhatsAppAdapter:
         templates=False, rich_media=False, typing_indicators=False, read_receipts=True
     )
 
-    async def verify_inbound_signature(
-        self, raw_body: bytes, headers: dict[str, str], secret: str
-    ) -> bool:
-        """Verify Meta's ``X-Hub-Signature-256`` HMAC-SHA256 over the raw body."""
-        received = _get_header(headers, "X-Hub-Signature-256")
-        if not received:
-            return False
-        expected = _compute_signature(raw_body, secret)
-        return hmac.compare_digest(received, expected)
-
-    async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str:
-        """Answer Meta's webhook-subscription handshake.
-
-        Meta calls ``GET`` with ``hub.mode=subscribe``, ``hub.verify_token``
-        (compared against the ``verify_token`` set alongside ``app_secret``
-        in this connection's secret, when the webhook URL is registered in
-        the Meta App dashboard), and ``hub.challenge`` -- echoed back
-        verbatim as plain text on a match, the one part of this handshake
-        Meta's docs are strict about.
-        """
-        expected_token = credentials.get("verify_token")
-        challenge = params.get("hub.challenge")
-        if (
-            params.get("hub.mode") != "subscribe"
-            or not expected_token
-            or params.get("hub.verify_token") != expected_token
-            or not challenge
-        ):
-            raise ChannelAdapterError("WhatsApp webhook subscription verification failed")
-        return challenge
-
     async def normalize_inbound(
         self, raw_payload: dict[str, Any]
     ) -> list[NormalizedInboundMessage]:
         """Flatten Meta's nested webhook batch into normalized messages.
 
         Shape: ``entry[].changes[].value.{messages[], contacts[]}`` -- Meta
-        batches multiple messages (and contacts) per webhook call.
+        batches multiple messages (and contacts) per webhook call. Delivery
+        statuses arrive under a separate ``value.statuses[]`` key, so this
+        method naturally ignores them (they're handled by
+        ``interpret_delivery_webhook``).
         """
         messages: list[NormalizedInboundMessage] = []
         for entry in raw_payload.get("entry", []):
@@ -132,7 +114,7 @@ class WhatsAppAdapter:
             "type": "text",
             "text": {"body": content.body_text},
         }
-        url = f"{_GRAPH_API_BASE}/{phone_number_id}/messages"
+        url = f"{GRAPH_API_BASE}/{phone_number_id}/messages"
         headers = {"Authorization": f"Bearer {access_token}"}
         try:
             data = await _post_graph_api(url, headers, payload)
@@ -185,25 +167,3 @@ def _normalize_message(
         body_text=body_text,
         content_type="text/plain",
     )
-
-
-def _compute_signature(raw_body: bytes, secret: str) -> str:
-    mac = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256)
-    return f"sha256={mac.hexdigest()}"
-
-
-def _get_header(headers: dict[str, str], name: str) -> str | None:
-    for key, value in headers.items():
-        if key.lower() == name.lower():
-            return value
-    return None
-
-
-async def _post_graph_api(
-    url: str, headers: dict[str, str], payload: dict[str, Any]
-) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
-        return data

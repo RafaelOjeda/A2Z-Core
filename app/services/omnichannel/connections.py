@@ -98,7 +98,9 @@ def to_view(
 
 async def _require_admin(org_id: str, actor_user_id: str) -> None:
     await access.require_role(
-        actor_user_id, org_id, access.ADMIN_ROLES,
+        actor_user_id,
+        org_id,
+        access.ADMIN_ROLES,
         forbidden_message="Only Owner/Admin can manage channel connections",
     )
 

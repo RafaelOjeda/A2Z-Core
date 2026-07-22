@@ -121,7 +121,9 @@ async def claim(
         ConversationAlreadyAssignedError: Already assigned to someone else.
     """
     await access.require_role(
-        user_id, org_id, access.NON_VIEWER_ROLES,
+        user_id,
+        org_id,
+        access.NON_VIEWER_ROLES,
         forbidden_message="Viewers cannot claim conversations",
     )
 
@@ -153,11 +155,14 @@ async def reassign(
         ConversationNotFoundError: No such conversation for this org.
     """
     await access.require_role(
-        actor_user_id, org_id, access.ADMIN_ROLES,
+        actor_user_id,
+        org_id,
+        access.ADMIN_ROLES,
         forbidden_message="Only Owner/Admin can reassign a conversation",
     )
     await access.require_membership(
-        assignee_user_id, org_id,
+        assignee_user_id,
+        org_id,
         message=f"{assignee_user_id!r} is not a member of this org",
     )
 
@@ -215,7 +220,9 @@ async def set_routing_config(
             without a designated user.
     """
     await access.require_role(
-        actor_user_id, org_id, access.ADMIN_ROLES,
+        actor_user_id,
+        org_id,
+        access.ADMIN_ROLES,
         forbidden_message="Only Owner/Admin can configure routing",
     )
 
@@ -227,7 +234,8 @@ async def set_routing_config(
         if not single_assignee_user_id:
             raise RoutingError("single_assignee requires single_assignee_user_id")
         await access.require_membership(
-            single_assignee_user_id, org_id,
+            single_assignee_user_id,
+            org_id,
             message=f"{single_assignee_user_id!r} is not a member of this org",
         )
 

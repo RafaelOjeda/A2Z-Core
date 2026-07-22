@@ -19,6 +19,7 @@ class ChannelAdapter(Protocol):
     supported_features: SupportedFeatures
 
     async def verify_inbound_signature(self, raw_body: bytes, headers: dict[str, str], secret: str) -> bool: ...
+    async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str: ...
     async def normalize_inbound(self, raw_payload: dict[str, Any]) -> list[NormalizedInboundMessage]: ...
     async def send_outbound(self, to: str, content: OutboundContent, credentials: dict[str, Any]) -> SendResult: ...
     async def interpret_delivery_webhook(self, raw_payload: dict[str, Any]) -> list[DeliveryStatusUpdate]: ...
@@ -51,6 +52,8 @@ migration-plus-infra project — which is why each is guarded by a test (see
 _REGISTRY: dict[str, ChannelAdapter] = {
     "email": EmailAdapter(),
     "whatsapp": WhatsAppAdapter(),
+    "messenger": MessengerAdapter(),
+    "instagram": InstagramAdapter(),
 }
 ```
 
@@ -58,6 +61,32 @@ _REGISTRY: dict[str, ChannelAdapter] = {
 unregistered type. **`SmsAdapter` exists and is fully implemented
 (`adapters/sms.py`) but is not in this registry** — see
 [known limitations](known-issues.md) for why that matters.
+
+## The Meta base adapter (`adapters/_meta.py`)
+
+WhatsApp, Facebook Messenger, and Instagram are all Meta Graph API channels
+and share two pieces of machinery **byte-for-byte**: `X-Hub-Signature-256`
+HMAC-SHA256 inbound signature verification (keyed by the connection's
+`app_secret`), and the `hub.mode`/`hub.verify_token`/`hub.challenge`
+subscription handshake Meta requires before it will deliver webhooks. Those
+two `ChannelAdapter` methods — plus a shared `post_graph_api` helper — live on
+`MetaGraphAdapter`, and every Meta channel inherits it:
+
+```
+ChannelAdapter (Protocol)
+├── EmailAdapter
+└── MetaGraphAdapter                 verify_inbound_signature, verify_subscription
+    ├── WhatsAppAdapter              changes[].value.messages[] shape
+    └── MessengerPlatformAdapter     entry[].messaging[] shape
+        ├── MessengerAdapter         account id = page_id
+        └── InstagramAdapter         account id = ig_id
+```
+
+A leaf provides only what genuinely differs per channel: `supported_features`
+and the three shape-specific methods (`normalize_inbound`, `send_outbound`,
+`interpret_delivery_webhook`). `MetaGraphAdapter` deliberately does **not**
+implement those, so a leaf that forgets one fails the registry's
+`isinstance(..., ChannelAdapter)` Protocol guard loudly.
 
 ## Email adapter (`adapters/email.py`)
 
@@ -101,6 +130,49 @@ Meta WhatsApp Cloud (Graph) API over `httpx`.
    so the customer's message still shows up and idempotency still holds,
    rather than silently dropping it.
 
+## Messenger adapter (`adapters/messenger.py`)
+
+Meta Messenger Platform (Graph API) over `httpx`. Signature verification and
+the subscription handshake are inherited from `MetaGraphAdapter`; this module
+supplies the Messenger-Platform payload shapes. Instagram DMs run on the
+*same* Messenger Platform, so the actual logic lives on
+`MessengerPlatformAdapter` and `MessengerAdapter` is the Facebook-Pages leaf.
+
+| Method | Behavior |
+|---|---|
+| `verify_inbound_signature` | Inherited — `X-Hub-Signature-256` HMAC-SHA256 against the connection's `app_secret` |
+| `verify_subscription` | Inherited — echoes Meta's `hub.challenge` when `hub.verify_token` matches the stored `verify_token` |
+| `normalize_inbound` | Walks `entry[].messaging[]`; emits **one message per genuine customer message only** — delivery receipts, read receipts, and echoes of the page's own outbound (`message.is_echo`) are skipped. `external_id = sender.id` (PSID), `external_message_id = message.mid` |
+| `send_outbound` | Requires `org_id`, `page_access_token`, `page_id` in `credentials`. POSTs `{"messaging_type":"RESPONSE","recipient":{"id":to},"message":{"text":...}}` to `/{page_id}/messages`. **Text-only** — raises if `content.body_text` is empty |
+| `interpret_delivery_webhook` | Maps each id in a `delivery.mids[]` event to a `delivered` update; a `read` event is watermark-only (no per-message id) and is intentionally not emitted |
+
+`supported_features = SupportedFeatures(templates=False, rich_media=False, typing_indicators=False, read_receipts=True, requires_credentials=True)`.
+
+**The `messaging[]` array is why `normalize_inbound` must filter.** Unlike
+WhatsApp (which separates customer messages from delivery statuses into
+different keys), the Messenger Platform mixes messages, delivery receipts,
+read receipts, and outbound echoes into one `entry[].messaging[]` array. The
+worker persists whatever `normalize_inbound` returns, so returning a receipt
+event would create a junk conversation — hence only non-echo `message` events
+survive. Guarded by `test_messenger_adapter.py::test_normalize_inbound_skips_delivery_read_and_echo`.
+
+**Same accepted v1 gaps as WhatsApp:** outbound is text-only (message tags /
+templates for business-initiated sends outside the 24h window are deferred),
+and inbound media persists with a placeholder body rather than being
+downloaded. One extra Messenger difference: its webhooks carry **no inline
+sender name** (WhatsApp's do, via `contacts[]`), so the customer identity is
+created with `display_name=None`.
+
+## Instagram adapter (`adapters/instagram.py`)
+
+Instagram Direct Messages run on the same Messenger Platform, so
+`InstagramAdapter` subclasses `MessengerPlatformAdapter` and overrides only
+one thing: the Send API account id comes from the `ig_id` credential (the
+Instagram professional-account id linked to the connected Page) rather than
+`page_id`, so sends go to `/{ig_id}/messages`. Everything else — signature,
+handshake, `messaging[]` normalize, delivery interpretation, the text-only /
+media / no-sender-name gaps — is inherited unchanged.
+
 ## SMS adapter (`adapters/sms.py`) — built, not wired in
 
 Outbound via AWS SNS SMS (a provider decision recorded in
@@ -129,11 +201,14 @@ was written but never finished being wired in — see
 
 ## Configuration
 
-`RATE_LIMITS["omnichannel.whatsapp.send"] = (80, 1)` in `app/config.py` is
-the one channel-specific outbound rate limit registered so far (Meta's
-pair-rate ceiling). SMS has no registered limit (unregistered — consistent
-with it not being wired in). Email needs none — `core.email.send_email`
-already enforces its own 50/hour/org limit.
+`app/config.py` registers a per-channel outbound rate limit for each Meta
+channel: `RATE_LIMITS["omnichannel.whatsapp.send"] = (80, 1)`,
+`["omnichannel.messenger.send"] = (80, 1)`,
+`["omnichannel.instagram.send"] = (80, 1)` (all modeled on Meta's pair-rate
+ceiling until tuned against the provider contract per tier). SMS has no
+registered limit (unregistered — consistent with it not being wired in).
+Email needs none — `core.email.send_email` already enforces its own
+50/hour/org limit.
 
 ## Security considerations
 

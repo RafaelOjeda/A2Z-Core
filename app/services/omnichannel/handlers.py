@@ -86,7 +86,9 @@ async def send_reply(
     the actual channel send happens in the worker, §5.6).
     """
     await access.require_role(
-        user_id, org_id, access.NON_VIEWER_ROLES,
+        user_id,
+        org_id,
+        access.NON_VIEWER_ROLES,
         forbidden_message="Viewers cannot send outbound messages",
     )
 

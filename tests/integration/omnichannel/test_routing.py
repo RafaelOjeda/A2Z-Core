@@ -41,9 +41,7 @@ def _membership(org_id: str, role: Role) -> Membership:
 
 
 def _stub_membership(monkeypatch: pytest.MonkeyPatch, role: Role, org_id: str = "org-a") -> None:
-    monkeypatch.setattr(
-        access, "get_membership", AsyncMock(return_value=_membership(org_id, role))
-    )
+    monkeypatch.setattr(access, "get_membership", AsyncMock(return_value=_membership(org_id, role)))
 
 
 def _mock_audit_and_realtime(monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:

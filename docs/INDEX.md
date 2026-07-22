@@ -30,7 +30,7 @@ description of current code.
 | Run something locally / a helper script | [scripts.md](scripts.md), [`../README.md`](../README.md) |
 | Understand deploy / CI | [architecture/deployment.md](architecture/deployment.md), [ci-cd.md](ci-cd.md), [`../infra/README.md`](../infra/README.md) |
 | Know a retention / cost / product decision | [retention.md](retention.md), [cost-notes.md](cost-notes.md), [omnichannel-decisions.md](omnichannel-decisions.md) |
-| Start Invoicing (Phase 2) | [phase2-invoicing.md](phase2-invoicing.md) |
+| Start Invoicing (Phase 2) | [`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) (design) + [phase2-invoicing.md](phase2-invoicing.md) (roadmap) |
 | Split the monolith later | [architecture/microservices-distribution.md](architecture/microservices-distribution.md) |
 
 ---
@@ -75,6 +75,15 @@ description of current code.
 | [routing-and-realtime.md](services/omnichannel/routing-and-realtime.md) | Assignment/routing rules + SSE stream/presence |
 | [api-reference.md](services/omnichannel/api-reference.md) | Every `/v1/omnichannel/*` route |
 | **[known-issues.md](services/omnichannel/known-issues.md)** | **Documented drift between the design doc and the implementation — read regardless of task** |
+
+## Invoicing service (Phase 2 — not yet built)
+
+No `docs/services/invoicing/` tree yet (it lands with the code). Design and roadmap:
+
+| Doc | Covers |
+|---|---|
+| [`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) | Authoritative design: data model, HTTP surface, state machine, Core dependency map |
+| [phase2-invoicing.md](phase2-invoicing.md) | Short kickoff roadmap / build order |
 
 ## Cross-cutting operational references (`docs/`)
 

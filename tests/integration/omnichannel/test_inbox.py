@@ -1,9 +1,10 @@
 """Integration tests for inbox reads (§3, §5.1 -- Build Order Step 9).
 
 Real Postgres for the queries, real moto S3 + fakeredis for the signed
-attachment URLs. ``core.membership.get_membership`` is stubbed at the
-module's import site, matching what the routing/handler suites do -- seeding
-Core's membership table is orthogonal to what this module owns.
+attachment URLs. ``core.membership.get_membership`` is stubbed at ``access`` -- the single
+seam the authz gate resolves membership through, matching what the
+routing/handler suites do -- since seeding Core's membership table is
+orthogonal to what this module owns.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ def _stub_membership(
         if role is None
         else Membership(user_id="agent-1", org_id=org_id, role=role, joined_at=_NOW)
     )
-    monkeypatch.setattr(inbox, "get_membership", AsyncMock(return_value=value))
+    monkeypatch.setattr(access, "get_membership", AsyncMock(return_value=value))
 
 
 async def _seed_conversation(

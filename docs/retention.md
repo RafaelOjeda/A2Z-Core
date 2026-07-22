@@ -1,6 +1,7 @@
 # Data Retention Policy
 
 > Part of the [documentation index](README.md). See also: [data flow architecture](architecture/data-flow.md), [migration strategy](migrations.md).
+> **Authority:** _spec_ — normative; code is expected to conform to this.
 
 Retention is enforced by **TTL attributes written at insert time** and **S3
 lifecycle rules** — never by cleanup jobs (CLAUDE.md §11). This keeps cost near

@@ -1,6 +1,7 @@
 # Migration Strategy
 
 > Part of the [documentation index](README.md). See also: [Omni-Channel data model](services/omnichannel/data-model.md), [Omni-Channel known issues](services/omnichannel/known-issues.md#3-duplicateorphaned-alembic-migration).
+> **Authority:** _spec_ — normative; code is expected to conform to this.
 
 Two different stores, two different migration mechanisms — DynamoDB is
 schemaless and never runs a formal migration tool; Postgres (Omni-Channel)
@@ -47,11 +48,11 @@ flowchart LR
     Fix --> Dedup["0003_message_client_dedup_key.py\n(rev 0003_message_dedup_key,\ndown_revision=0002_inbox_index)\nadds messages.client_dedup_key\n+ partial unique index"]
 ```
 
-> **⚠ This chain is not the only file in `versions/`.** See
-> [Omni-Channel known issues #3](services/omnichannel/known-issues.md#3-duplicateorphaned-alembic-migration)
-> for a documented orphaned duplicate (`0001_initial_schema.py`) that gives
-> Alembic two heads against a fresh database. Resolve that before treating
-> `alembic upgrade head` as safe to run unattended.
+> **This chain is a single linear head.** An earlier orphaned duplicate root
+> (`0001_initial_schema.py`) that gave Alembic two heads was removed on
+> 2026-07-20; `alembic upgrade head` against a fresh database now runs the
+> chain above end to end (verified: `<base>` → `1bfacee578a4` → `0002` →
+> `0003`, 10 tables).
 
 The full-text GIN index on `messages.body_text` is hand-added at the end of
 migration `0001_baseline_schema.py`'s `upgrade()` — SQLAlchemy's ORM layer

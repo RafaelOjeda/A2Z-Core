@@ -10,11 +10,13 @@ WhatsApp Business token for one org's Omni-Channel connection. Secret values
 are never logged; only ``org_id``, ``service_type``, ``key``, and cache
 hit/miss.
 
-This module only reads. Whatever writes or rotates a secret (a future admin
-flow, out of Core's scope per root CLAUDE.md §14) is responsible for
-deleting the Redis cache key so stale reads don't outlive rotation by more
-than the TTL; absent that, reads may be stale for up to 5 minutes — an
-accepted window (root CLAUDE.md §6.2).
+``put_secret`` is the self-service write path (2026-07-18 addition): a
+service's connect-a-channel flow calls it directly with credentials a user
+just typed in, instead of requiring an engineer to write the value into
+Secrets Manager by hand first. It invalidates the Redis cache key on write
+so a read immediately after a write is never stale; a read that raced the
+write and already cached the old (or absent) value can still lag by up to
+the 5-minute TTL, same accepted window as before.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from app.core import clients
-from app.core.exceptions import SecretNotFoundError
+from app.core.exceptions import SecretNotFoundError, SecretsError
 from app.core.logging import get_logger
 
 log = get_logger("core.secrets")
@@ -85,3 +87,48 @@ async def get_secret(org_id: str, service_type: str, key: str) -> dict[str, Any]
         extra={"org_id": org_id, "service_type": service_type, "key": key},
     )
     return value
+
+
+async def put_secret(org_id: str, service_type: str, key: str, value: dict[str, Any]) -> None:
+    """Create or update a secret for an org/service pair.
+
+    The self-service counterpart to :func:`get_secret`: a connect-a-channel
+    flow calls this with credentials a user just submitted (e.g. a WhatsApp
+    access token pasted into a form), so no one needs AWS console/CLI access
+    to onboard an org.
+
+    Args:
+        org_id: Org the secret belongs to (always required — no cross-org writes).
+        service_type: Owning service, e.g. ``"omnichannel"``.
+        key: Logical name within that org/service, e.g. a connection id.
+        value: The secret value; stored as JSON. Never logged.
+
+    Raises:
+        SecretsError: The underlying Secrets Manager call failed.
+
+    Performance: < 300ms (uncached — one or two Secrets Manager calls).
+    """
+    name = _secret_name(org_id, service_type, key)
+    raw = json.dumps(value)
+    try:
+        await clients.run_aws(
+            clients.secretsmanager().put_secret_value, SecretId=name, SecretString=raw
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code != "ResourceNotFoundException":
+            raise SecretsError(f"Failed to write secret at {name}: {exc}") from exc
+        try:
+            await clients.run_aws(
+                clients.secretsmanager().create_secret, Name=name, SecretString=raw
+            )
+        except ClientError as create_exc:
+            raise SecretsError(f"Failed to create secret at {name}: {create_exc}") from create_exc
+
+    # Invalidate rather than write-through: the next get_secret repopulates
+    # from the value we just wrote, so this can't drift from what's in AWS.
+    await clients.redis_client().delete(_cache_key(org_id, service_type, key))
+    log.info(
+        "secret.write",
+        extra={"org_id": org_id, "service_type": service_type, "key": key},
+    )

@@ -133,6 +133,11 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "ai.parse.user": (30, 60),  # 30 / min / user (future: Invoicing)
     "ai.parse.org": (500, 86400),  # 500 / day / org (future: Invoicing)
     "omnichannel.whatsapp.send": (80, 1),  # Meta pair-rate ceiling; tune per tier
+    # Messenger Platform (Facebook Messenger + Instagram DMs) share Meta's
+    # per-page Send API throughput; exact ceilings come from the provider
+    # contract/tier -- modeled on WhatsApp's until then.
+    "omnichannel.messenger.send": (80, 1),
+    "omnichannel.instagram.send": (80, 1),
 }
 
 # Cost note (CLAUDE.md §10): revisit DynamoDB provisioned capacity only if

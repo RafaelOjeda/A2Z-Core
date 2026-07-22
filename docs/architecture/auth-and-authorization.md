@@ -1,6 +1,7 @@
 # Authentication & Authorization
 
 > Part of the [documentation index](../README.md). See also: [request lifecycle](request-lifecycle.md), [`core.auth` reference](../core/auth.md), [`core.membership` reference](../core/membership.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 Authentication (who is this?) and authorization (what can they do?) are
 deliberately split between two different owners:

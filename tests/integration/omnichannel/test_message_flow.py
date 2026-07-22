@@ -293,7 +293,7 @@ async def test_outbound_flow_sends_and_marks_sent(
     mock_post = AsyncMock(return_value={"messages": [{"id": "wamid.OUT1"}]})
     monkeypatch.setattr(whatsapp_module, "_post_graph_api", mock_post)
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership",
+        "app.services.omnichannel.access.get_membership",
         AsyncMock(return_value=_member_stub(connection.org_id)),
     )
 
@@ -403,7 +403,7 @@ async def test_send_reply_not_a_member_raises(
     connection = await _seed_connection(session)
     conversation = await _seed_identity_and_conversation(session, connection.org_id)
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership", AsyncMock(return_value=None)
+        "app.services.omnichannel.access.get_membership", AsyncMock(return_value=None)
     )
 
     from app.core.exceptions import NotFoundError
@@ -424,7 +424,7 @@ async def test_send_reply_guest_role_forbidden(
         joined_at=datetime.now(timezone.utc),
     )
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership", AsyncMock(return_value=guest)
+        "app.services.omnichannel.access.get_membership", AsyncMock(return_value=guest)
     )
 
     with pytest.raises(ForbiddenError):
@@ -435,7 +435,7 @@ async def test_send_reply_unknown_conversation_raises(
     aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership",
+        "app.services.omnichannel.access.get_membership",
         AsyncMock(return_value=_member_stub("org-a")),
     )
     with pytest.raises(ConversationNotFoundError):
@@ -453,7 +453,7 @@ async def test_outbound_send_failure_leaves_message_for_retry(
     )
     conversation = await _seed_identity_and_conversation(session, connection.org_id)
     monkeypatch.setattr(
-        "app.services.omnichannel.handlers.get_membership",
+        "app.services.omnichannel.access.get_membership",
         AsyncMock(return_value=_member_stub(connection.org_id)),
     )
 

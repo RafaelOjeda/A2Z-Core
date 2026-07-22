@@ -1,6 +1,7 @@
 # Configuration & Environment Variables
 
 > Part of the [documentation index](README.md). Source: [`app/config.py`](../app/config.py), [`.env.example`](../.env.example). See also: [`core/shared-infrastructure.md`](core/shared-infrastructure.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 All configuration loads through one `pydantic-settings` object
 (`app.config.Settings`, accessed via the cached `settings()` function).

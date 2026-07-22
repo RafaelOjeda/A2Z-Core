@@ -22,19 +22,35 @@ documentation index.**
 
 ## Local development
 
+Common tasks are in the `Makefile` (`make help` lists them):
+
+```bash
+make install          # venv + editable install with dev extras
+make test             # whole suite (starts Postgres via docker compose first)
+make test-unit        # fast; fully in-process, no backend needed
+make lint             # ruff check + format check + mypy --strict (same as CI)
+```
+
+### Running tests
+
+The suite runs **AWS against moto and Redis against fakeredis, both
+in-process** (`tests/conftest.py`), so the *only* external backend it needs is
+**Postgres** — there's no in-process fake for it. `make test` starts a Postgres
+container for you; any Postgres reachable at `DATABASE_URL` (default matches
+`.env.example` / docker-compose) works equally well. Unit tests need nothing.
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Optional: real backing services (otherwise tests use moto + fakeredis)
-docker compose up -d
-cp .env.example .env
-python -m scripts.create_local_resources    # tables, bucket, bus, SES config
-
-pytest tests/unit -v                  # fast, in-process AWS mocks
-pytest tests/integration -v           # moto/LocalStack-backed
-pytest tests/load -m load -v          # latency checks
+docker compose up -d postgres         # the one backend the suite can't fake
+pytest tests/unit -v                  # fast, fully in-process (no backend)
+pytest tests/integration -v           # Postgres + in-process moto/fakeredis
+pytest tests/load -m load -v          # latency checks (also needs Postgres)
 ruff check . && ruff format --check . && mypy app scripts   # lint + format + types
+
+# For manual end-to-end dev against real-ish services (not needed for tests):
+make up                               # Postgres + Redis + LocalStack + resources
 ```
 
 ## Build artifacts
@@ -56,7 +72,7 @@ app/
   core/                # ★ the platform packages (frozen — see docs/core/)
   services/
     omnichannel/       # the first product service built on Core (see docs/services/omnichannel/)
-    invoicing/         # stub — Phase 2, not yet built (see docs/phase2-invoicing.md)
+    invoicing/         # stub — Phase 2, not yet built (design: app/services/invoicing/CLAUDE.md; roadmap: docs/phase2-invoicing.md)
   routers/             # thin HTTP layer over core/services
   lambdas/             # out-of-band handlers (Cognito, SES/SNS)
 infra/                 # Terragrunt (modules + migrations)
@@ -104,9 +120,11 @@ Gap-closure progress (verified evidence per phase):
   compositions with `dependency` wiring and the previously missing `ses` live
   composition. `terraform fmt` clean; `terraform validate` runs in the CI infra
   job (provider downloads are policy-blocked in the dev sandbox).
-- **Phase F — Invoicing kickoff**: roadmap in `docs/phase2-invoicing.md`
-  (outline only — Invoicing is a service that imports Core, never the
-  reverse; no invoicing code lands until Core is frozen).
+- **Phase F — Invoicing kickoff**: detailed design finalized 2026-07-22 in
+  `app/services/invoicing/CLAUDE.md` (data model, HTTP surface, state machine,
+  Core dependency map), with the short roadmap in `docs/phase2-invoicing.md`.
+  Invoicing is a service that imports Core, never the reverse, and needs no Core
+  change; no invoicing code lands until it's built out.
 - **Phase G — DoD closure**: CLAUDE.md §15 checklist fully ticked with
   evidence; Core is frozen. Remaining infra deferrals (ACM/HTTPS, Route53,
   RDS) are listed in `infra/README.md` and arrive with deployment/Phase 2.

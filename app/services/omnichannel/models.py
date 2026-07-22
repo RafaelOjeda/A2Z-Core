@@ -44,6 +44,8 @@ class ChannelType(str, Enum):
 
     EMAIL = "email"
     WHATSAPP = "whatsapp"
+    MESSENGER = "messenger"
+    INSTAGRAM = "instagram"
     SMS = "sms"
 
 

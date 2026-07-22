@@ -1,6 +1,7 @@
 # Cost Notes (AWS)
 
 > Part of the [documentation index](README.md). See also: [deployment architecture](architecture/deployment.md) (what's actually codified vs. applied), [Omni-Channel deployment](services/omnichannel/README.md) (its own MVP cost model lives in `app/services/omnichannel/CLAUDE.md` §10/§12).
+> **Authority:** _record_ — a dated decision/log, not a live description of current code.
 
 A2Z optimizes for *low fixed cost while volume is small and spiky*. Decisions
 here are deliberate (CLAUDE.md §10) and revisited only when measured spend

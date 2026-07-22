@@ -12,10 +12,8 @@ through the same internal helper, so the history and the live UI are
 consistent regardless of which path produced it. That history is also what
 makes commission (§5.5) replayable once Invoicing exists.
 
-Role note: §4's table uses "Agent"/"Viewer", but ``core.membership`` only
-defines OWNER/ADMIN/MEMBER/GUEST (root CLAUDE.md §14 -- there is no
-Permissions service). Same mapping as ``handlers.send_reply``: MEMBER ->
-Agent, GUEST -> Viewer.
+Role gates go through ``access.require_role`` / ``require_membership``, which
+own the MEMBER -> Agent / GUEST -> Viewer mapping (root CLAUDE.md §14).
 """
 
 from __future__ import annotations
@@ -27,30 +25,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.events import publish_event
-from app.core.exceptions import NotFoundError
-from app.core.membership import Role, get_membership
 from app.core.realtime import publish_update
 from app.core.settings import get_org_settings, set_org_settings
-from app.services.omnichannel import metrics
+from app.services.omnichannel import access, metrics
 from app.services.omnichannel.exceptions import (
     ConversationAlreadyAssignedError,
-    ConversationNotFoundError,
-    ForbiddenError,
     RoutingError,
 )
 from app.services.omnichannel.models import Conversation, ConversationAssignment
 
 _METADATA_KEY = "omnichannel"
 _SUPPORTED_STRATEGIES = ("manual", "single_assignee")
-
-
-async def _load_conversation(
-    session: AsyncSession, org_id: str, conversation_id: str
-) -> Conversation:
-    conversation = await session.get(Conversation, conversation_id)
-    if conversation is None or conversation.org_id != org_id:
-        raise ConversationNotFoundError(f"No conversation {conversation_id!r} for org {org_id!r}")
-    return conversation
 
 
 async def _record_assignment(
@@ -135,13 +120,14 @@ async def claim(
         ConversationNotFoundError: No such conversation for this org.
         ConversationAlreadyAssignedError: Already assigned to someone else.
     """
-    membership = await get_membership(user_id, org_id)
-    if membership is None:
-        raise NotFoundError("Not a member of this org")
-    if membership.role == Role.GUEST:
-        raise ForbiddenError("Viewers cannot claim conversations")
+    await access.require_role(
+        user_id,
+        org_id,
+        access.NON_VIEWER_ROLES,
+        forbidden_message="Viewers cannot claim conversations",
+    )
 
-    conversation = await _load_conversation(session, org_id, conversation_id)
+    conversation = await access.load_conversation(session, org_id, conversation_id)
     if conversation.assigned_user_id == user_id:
         return conversation
     if conversation.assigned_user_id is not None:
@@ -168,16 +154,19 @@ async def reassign(
         ForbiddenError: Actor's role can't reassign (only Owner/Admin can).
         ConversationNotFoundError: No such conversation for this org.
     """
-    actor_membership = await get_membership(actor_user_id, org_id)
-    if actor_membership is None:
-        raise NotFoundError("Not a member of this org")
-    if actor_membership.role not in (Role.OWNER, Role.ADMIN):
-        raise ForbiddenError("Only Owner/Admin can reassign a conversation")
+    await access.require_role(
+        actor_user_id,
+        org_id,
+        access.ADMIN_ROLES,
+        forbidden_message="Only Owner/Admin can reassign a conversation",
+    )
+    await access.require_membership(
+        assignee_user_id,
+        org_id,
+        message=f"{assignee_user_id!r} is not a member of this org",
+    )
 
-    if await get_membership(assignee_user_id, org_id) is None:
-        raise NotFoundError(f"{assignee_user_id!r} is not a member of this org")
-
-    conversation = await _load_conversation(session, org_id, conversation_id)
+    conversation = await access.load_conversation(session, org_id, conversation_id)
     await _record_assignment(session, conversation, assignee_user_id, actor_user_id, "reassign")
     return conversation
 
@@ -230,11 +219,12 @@ async def set_routing_config(
         RoutingError: Unknown/unsupported strategy, or ``single_assignee``
             without a designated user.
     """
-    membership = await get_membership(actor_user_id, org_id)
-    if membership is None:
-        raise NotFoundError("Not a member of this org")
-    if membership.role not in (Role.OWNER, Role.ADMIN):
-        raise ForbiddenError("Only Owner/Admin can configure routing")
+    await access.require_role(
+        actor_user_id,
+        org_id,
+        access.ADMIN_ROLES,
+        forbidden_message="Only Owner/Admin can configure routing",
+    )
 
     if strategy not in _SUPPORTED_STRATEGIES:
         raise RoutingError(
@@ -243,8 +233,11 @@ async def set_routing_config(
     if strategy == "single_assignee":
         if not single_assignee_user_id:
             raise RoutingError("single_assignee requires single_assignee_user_id")
-        if await get_membership(single_assignee_user_id, org_id) is None:
-            raise NotFoundError(f"{single_assignee_user_id!r} is not a member of this org")
+        await access.require_membership(
+            single_assignee_user_id,
+            org_id,
+            message=f"{single_assignee_user_id!r} is not a member of this org",
+        )
 
     org_settings = await get_org_settings(org_id)
     metadata = dict(org_settings.metadata)

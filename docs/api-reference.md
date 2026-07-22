@@ -1,6 +1,7 @@
 # HTTP API Reference
 
 > Part of the [documentation index](README.md). See also: [request lifecycle](architecture/request-lifecycle.md), [Omni-Channel API reference](services/omnichannel/api-reference.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 `app/main.py` mounts three routers. All are **thin** — they parse the
 request and call into `core`/service code (`CLAUDE.md` §2); no business

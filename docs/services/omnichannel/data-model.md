@@ -1,6 +1,7 @@
 # Omni-Channel Data Model
 
 > Part of the [Omni-Channel service docs](README.md). Source: [`app/services/omnichannel/models.py`](../../../app/services/omnichannel/models.py), [`db.py`](../../../app/services/omnichannel/db.py), [migrations](../../../app/services/omnichannel/migrations/versions/).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Overview
 

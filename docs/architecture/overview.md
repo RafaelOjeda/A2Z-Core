@@ -1,6 +1,7 @@
 # System Architecture Overview
 
 > Part of the [documentation index](../README.md). See also: [request lifecycle](request-lifecycle.md), [auth & authorization](auth-and-authorization.md), [data flow](data-flow.md), [event-driven architecture](event-driven-architecture.md), [deployment](deployment.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## What this system is
 
@@ -139,7 +140,9 @@ trade-off documented in `CLAUDE.md`: one FastAPI process, one deploy unit, no
 service-to-service network auth to build. Services are logically separated by
 Python package boundaries and the "events only" cross-service rule, not by
 network boundaries. Revisit only if Core is ever extracted into its own
-deployable (not currently planned).
+deployable (not currently planned). The forward-looking plan for *how* a
+split would happen — triggers, phases, and what stays unchanged — is
+[microservices-distribution.md](microservices-distribution.md).
 
 ## Repository map
 

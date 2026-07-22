@@ -1,6 +1,7 @@
 # `core.settings` — Org Configuration
 
 > Part of the [Core module reference](README.md). Source: [`app/core/settings.py`](../../app/core/settings.py). See also: [data flow](../architecture/data-flow.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 

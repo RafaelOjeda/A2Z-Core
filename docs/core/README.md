@@ -1,6 +1,7 @@
 # Core Module Reference
 
 > Part of the [documentation index](../README.md). See also: [architecture overview](../architecture/overview.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 `app/core/` is the platform layer every A2Z service imports in-process.
 **Core is frozen** (`CLAUDE.md` §15/§16): all modules below meet the Phase 1

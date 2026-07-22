@@ -1,6 +1,7 @@
 # Known Issues & Design-vs-Implementation Drift
 
 > Part of the [Omni-Channel service docs](README.md). This page exists specifically because `app/services/omnichannel/CLAUDE.md` (the service's original build plan) and the actual code have diverged in a few places since it was last updated. Per the audit instructions this documentation tree follows: derive behavior from the code, not the plan, when the two disagree — and record the disagreement here rather than silently picking one.
+> **Authority:** _record_ — a dated decision/log, not a live description of current code.
 
 ## 1. SMS adapter is fully built but not registered
 

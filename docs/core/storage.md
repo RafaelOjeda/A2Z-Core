@@ -1,6 +1,7 @@
 # `core.storage` — Org-Scoped File Storage
 
 > Part of the [Core module reference](README.md). Source: [`app/core/storage.py`](../../app/core/storage.py). See also: [data flow](../architecture/data-flow.md), [retention policy](../retention.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 

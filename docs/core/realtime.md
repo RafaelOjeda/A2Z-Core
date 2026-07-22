@@ -1,6 +1,7 @@
 # `core.realtime` — Fan-Out to Connected Clients
 
 > Part of the [Core module reference](README.md). Source: [`app/core/realtime.py`](../../app/core/realtime.py). See also: [event-driven architecture](../architecture/event-driven-architecture.md), [Omni-Channel realtime inbox](../services/omnichannel/routing-and-realtime.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 

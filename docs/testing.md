@@ -1,6 +1,7 @@
 # Testing
 
 > Part of the [documentation index](README.md). See also: [CI/CD](ci-cd.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Test layout
 

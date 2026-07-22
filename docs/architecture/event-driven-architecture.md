@@ -1,6 +1,7 @@
 # Event-Driven Architecture
 
 > Part of the [documentation index](../README.md). See also: [event catalog](../events.md), [`core.events` reference](../core/events-module.md), [Omni-Channel message flow](../services/omnichannel/message-flow.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 A2Z uses **two independent event mechanisms** that are easy to conflate but
 serve different purposes. Confusing them is a documented footgun

@@ -3,10 +3,10 @@
 Runs against real Postgres (conversation_assignments rows) and real Core
 settings (moto DynamoDB + fakeredis, via the ``aws`` fixture) so
 ``set_routing_config``'s metadata round-trip is genuinely exercised, not
-mocked. ``core.membership.get_membership`` is stubbed at the module's own
-import site (``routing.get_membership``) since seeding Core's membership
-table is orthogonal to what this module is responsible for -- same pattern
-Step 5's tests used for ``handlers.get_membership``. ``core.audit.log_audit``
+mocked. ``core.membership.get_membership`` is stubbed at ``access`` -- the
+single seam the authz gate resolves membership through -- since seeding
+Core's membership table is orthogonal to what this module is responsible
+for -- same pattern the handler suite uses. ``core.audit.log_audit``
 and ``core.realtime.publish_update`` are mocked too, for the same reason
 Step 5 mocked ``worker.publish_event``/``worker.publish_update``: Core's own
 suite already covers their internals.
@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.membership import Membership, Role
-from app.services.omnichannel import routing, worker
+from app.services.omnichannel import access, routing, worker
 from app.services.omnichannel.exceptions import (
     ConversationAlreadyAssignedError,
     ConversationNotFoundError,
@@ -41,9 +41,7 @@ def _membership(org_id: str, role: Role) -> Membership:
 
 
 def _stub_membership(monkeypatch: pytest.MonkeyPatch, role: Role, org_id: str = "org-a") -> None:
-    monkeypatch.setattr(
-        routing, "get_membership", AsyncMock(return_value=_membership(org_id, role))
-    )
+    monkeypatch.setattr(access, "get_membership", AsyncMock(return_value=_membership(org_id, role)))
 
 
 def _mock_audit_and_realtime(monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:
@@ -164,7 +162,7 @@ async def test_claim_guest_forbidden(
 async def test_claim_not_a_member_raises(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(routing, "get_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(access, "get_membership", AsyncMock(return_value=None))
     conversation = await _seed_conversation(session)
 
     from app.core.exceptions import NotFoundError
@@ -220,7 +218,7 @@ async def test_reassign_to_non_member_raises(
 ) -> None:
     # First call (actor) succeeds, second call (assignee) returns None.
     calls = [_membership("org-a", Role.ADMIN), None]
-    monkeypatch.setattr(routing, "get_membership", AsyncMock(side_effect=calls))
+    monkeypatch.setattr(access, "get_membership", AsyncMock(side_effect=calls))
     conversation = await _seed_conversation(session)
 
     from app.core.exceptions import NotFoundError

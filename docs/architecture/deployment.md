@@ -1,6 +1,7 @@
 # Deployment Architecture
 
 > Part of the [documentation index](../README.md). See also: [`infra/README.md`](../../infra/README.md) (apply instructions), [CI/CD](../ci-cd.md), [cost notes](../cost-notes.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 There are **two deployment shapes described in this repository**, at
 different levels of infra codification. This is a real, intentional split —

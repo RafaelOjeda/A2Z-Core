@@ -368,7 +368,7 @@ Order chosen by dependency depth:
 - [x] `secrets` + `realtime` modules implemented to Core's bar (unit + integration tests, cross-org isolation, docstrings with perf targets) per the Omni-Channel unfreeze protocol (`app/services/omnichannel/CLAUDE.md` §6.2, Build Order Step 1). Full suite re-verified green with no regressions; Core re-frozen.
 
 When all boxes are checked, Core is frozen and Invoicing (Phase 2) can begin.
-**Status: all boxes checked — Core is frozen. Phase 2 kickoff roadmap: `docs/phase2-invoicing.md`.**
+**Status: all boxes checked — Core is frozen. Phase 2 Invoicing design (finalized 2026-07-22): `app/services/invoicing/CLAUDE.md`; short roadmap: `docs/phase2-invoicing.md`.**
 
 **Deliberate unfreeze (Phase 3 prerequisite, 2026-07-08):** `secrets.py` and
 `realtime.py` were added per `app/services/omnichannel/CLAUDE.md` §6.2 — the
@@ -376,6 +376,21 @@ two Core modules Omni-Channel needs that don't belong to any one service.
 Added to the module table in §3, full suite re-run green (83 tests, 94% core
 coverage, `ruff` + `mypy --strict` clean), Core re-frozen. No other module was
 touched.
+
+**Current state (updated 2026-07-20):** Phase 3 Omni-Channel is now
+substantially built — not future work. It has a mounted router
+(`/v1/omnichannel`, see `docs/api-reference.md` and
+`docs/services/omnichannel/`), channel adapters (email/SMS/WhatsApp),
+Alembic migrations, and its own test tree. Two deliberate, self-service-driven
+Core additions landed since the 07-08 re-freeze and are the current Core API
+surface: `core.secrets.put_secret` (write path) and
+`core.email.start_domain_verification` / `get_domain_verification_status`
+(per-org SES domain onboarding, exposed at
+`GET /v1/core/orgs/{org_id}/domain-verification`). Whole-repo suite now
+collects **286 tests** (the "81/83 tests" figures above are Core-only
+historical snapshots, left as-is). The authoritative current-state reference
+for anything under `docs/` is that tree, not this build log — see
+`docs/README.md`.
 
 ---
 

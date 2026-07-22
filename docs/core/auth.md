@@ -1,6 +1,7 @@
 # `core.auth` — Authentication
 
 > Part of the [Core module reference](README.md). Source: [`app/core/auth.py`](../../app/core/auth.py). See also: [auth & authorization architecture](../architecture/auth-and-authorization.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 

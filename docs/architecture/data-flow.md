@@ -1,6 +1,7 @@
 # Data Flow & Storage Architecture
 
 > Part of the [documentation index](../README.md). See also: [architecture overview](overview.md), [Omni-Channel data model](../services/omnichannel/data-model.md), [retention policy](../retention.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Storage systems and what lives where
 

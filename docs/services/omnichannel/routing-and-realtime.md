@@ -1,6 +1,7 @@
 # Routing, Assignment, Presence & Realtime Inbox
 
 > Part of the [Omni-Channel service docs](README.md). Source: [`routing.py`](../../../app/services/omnichannel/routing.py), [`presence.py`](../../../app/services/omnichannel/presence.py), [`stream.py`](../../../app/services/omnichannel/stream.py).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## v1 scope
 

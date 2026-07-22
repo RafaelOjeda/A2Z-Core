@@ -1,6 +1,7 @@
 # CI/CD
 
 > Part of the [documentation index](README.md). Source: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). See also: [testing](testing.md), [deployment architecture](architecture/deployment.md).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Pipeline overview
 
@@ -9,6 +10,7 @@ flowchart LR
     Push["push to main / PR"] --> Lint["lint-type"]
     Push --> Test["test"]
     Push --> Docker["docker (needs: lint-type)"]
+    Push --> Docs["docs"]
     Push --> Infra["infra"]
 
     subgraph Lint["lint-type"]
@@ -24,6 +26,9 @@ flowchart LR
     end
     subgraph Docker["docker"]
         D1["docker build -t a2z-core:ci ."]
+    end
+    subgraph Docs["docs"]
+        DC1["python -m scripts.check_docs\n(relative links + INDEX.md registration)"]
     end
     subgraph Infra["infra"]
         I1["terraform fmt -check -recursive infra/"]
@@ -64,6 +69,17 @@ Builds the production image (`docker build -t a2z-core:ci .`) — verifies
 the multi-stage `Dockerfile` builds cleanly. Depends on `lint-type` passing
 first. Does **not** push the image anywhere or deploy it.
 
+### `docs`
+
+Runs `python -m scripts.check_docs` — a stdlib-only, dependency-free gate
+(no `pip install`, so it's fast). It fails the build on **(1)** any broken
+relative link in a tracked Markdown file, or **(2)** a `docs/` page that
+isn't linked from [`docs/INDEX.md`](INDEX.md). This is what keeps the index
+honest: a new doc can't be added and silently orphaned, and a renamed/moved
+doc can't leave a dangling link. It does **not** check external URLs or
+in-page `#anchor` targets — only that relative paths resolve on disk. See
+[scripts](scripts.md#check_docspy) for local usage.
+
 ### `infra`
 
 `terraform fmt -check -recursive infra/`, then `terraform validate` against
@@ -91,6 +107,7 @@ real apply — see [`infra/README.md`](../infra/README.md)).
 ```bash
 pip install -e ".[dev]"
 ruff check app tests scripts && ruff format --check app tests scripts && mypy app scripts
+python -m scripts.check_docs  # broken links + INDEX.md registration
 docker compose up -d          # postgres, redis, localstack (for manual/integration runs)
 pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov-report=term-missing
 docker build -t a2z-core:local .

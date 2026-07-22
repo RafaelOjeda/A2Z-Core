@@ -11,6 +11,10 @@ against these docs.
 [auth & authorization](architecture/auth-and-authorization.md) → whichever
 module or service you're actually touching.
 
+**Looking for something specific?** [`INDEX.md`](INDEX.md) is the flat,
+scannable table of every doc plus a "find it by task" lookup — this page is
+the guided tour, that one is the map.
+
 ## Architecture
 
 | Doc | Covers |
@@ -21,6 +25,7 @@ module or service you're actually touching.
 | [`architecture/data-flow.md`](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Redis/Secrets Manager, and how org-scoping is enforced per store |
 | [`architecture/event-driven-architecture.md`](architecture/event-driven-architecture.md) | EventBridge vs. Redis pub/sub — two mechanisms, when to use which |
 | [`architecture/deployment.md`](architecture/deployment.md) | ECS Fargate control plane vs. Omni-Channel's single-EC2 MVP; what's actually codified vs. planned |
+| [`architecture/microservices-distribution.md`](architecture/microservices-distribution.md) | Forward-looking plan for splitting the monolith into per-service deployables: triggers, phases, Core-as-SDK decision |
 
 ## Core platform layer (`app/core/`)
 
@@ -46,6 +51,15 @@ Start at [`services/omnichannel/README.md`](services/omnichannel/README.md).
 one regardless of what you're doing; it documents real drift between the
 service's design doc and its actual implementation.
 
+## Invoicing service (`app/services/invoicing/`) — Phase 2, not yet built
+
+The billing service. Not yet built (`app/services/invoicing/` is a package
+stub), so there is no `docs/services/invoicing/` reference tree yet — that
+lands with the code. The authoritative design lives in the service build plan
+[`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md)
+(data model, HTTP surface, state machine, Core dependency map), with the short
+roadmap in [`phase2-invoicing.md`](phase2-invoicing.md).
+
 ## Cross-cutting references
 
 | Doc | Covers |
@@ -58,6 +72,7 @@ service's design doc and its actual implementation.
 | [`migrations.md`](migrations.md) | DynamoDB's additive-change rules vs. Alembic for Postgres |
 | [`events.md`](events.md) | The current EventBridge event catalog (wire contract) |
 | [`retention.md`](retention.md) | TTL/lifecycle policy per data store |
+| [`zero-trust.md`](zero-trust.md) | Zero Trust API policy: the per-request verification pipeline, endpoint classes, never-trust rules, per-endpoint checklist |
 | [`cost-notes.md`](cost-notes.md) | AWS cost posture and thresholds to revisit |
 | [`omnichannel-decisions.md`](omnichannel-decisions.md) | Recorded product/engineering decisions for Omni-Channel |
 | [`phase2-invoicing.md`](phase2-invoicing.md) | Kickoff roadmap for the not-yet-built Invoicing service |
@@ -86,6 +101,8 @@ docs/
 ├── architecture/                    # cross-cutting system design + diagrams
 ├── core/                            # one doc per app/core/*.py module
 ├── services/omnichannel/            # one doc per concern of the Omni-Channel service
+│                                    # (services/invoicing/ lands with Phase 2 code;
+│                                    #  design lives in app/services/invoicing/CLAUDE.md)
 ├── api-reference.md, configuration.md, testing.md, ci-cd.md,
 ├── scripts.md, migrations.md        # cross-cutting operational references
 └── events.md, retention.md, cost-notes.md, omnichannel-decisions.md,

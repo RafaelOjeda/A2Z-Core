@@ -76,6 +76,19 @@ jobs:
       - name: build monolith image
         run: docker build -t a2z-core:ci .
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # No project install needed -- the checker uses only the stdlib, so this
+      # stays a fast, dependency-free gate. It fails on a broken relative link
+      # in any tracked Markdown file, or on a docs/ page missing from
+      # docs/INDEX.md (see docs/ci-cd.md).
+      - run: python -m scripts.check_docs
+
   infra:
     runs-on: ubuntu-latest
     steps:

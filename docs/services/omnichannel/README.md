@@ -1,13 +1,14 @@
 # Omni-Channel Service
 
 > Part of the [documentation index](../../README.md). See also: [architecture overview](../../architecture/overview.md), [`app/services/omnichannel/CLAUDE.md`](../../../app/services/omnichannel/CLAUDE.md) (the original build plan — treat this `docs/` tree as the current-state reference; the `CLAUDE.md` as the historical design record).
+> **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 
 A multi-tenant **unified inbox**: every customer message, from every
-connected channel (WhatsApp, email; SMS built but not wired in — see
-[known limitations](known-issues.md)), lands in one conversation view per
-org. Agents claim or get assigned conversations and reply from one screen;
+connected channel (email, WhatsApp, Facebook Messenger, Instagram DMs; SMS
+built but not wired in — see [known limitations](known-issues.md)), lands in
+one conversation view per org. Agents claim or get assigned conversations and reply from one screen;
 the reply goes back out through whichever channel the customer used. This
 is the first product service built on Core, and the proof that Core's
 platform layer generalizes beyond its own design.

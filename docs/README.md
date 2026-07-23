@@ -51,14 +51,17 @@ Start at [`services/omnichannel/README.md`](services/omnichannel/README.md).
 one regardless of what you're doing; it documents real drift between the
 service's design doc and its actual implementation.
 
-## Invoicing service (`app/services/invoicing/`) — Phase 2, not yet built
+## Invoicing service (`app/services/invoicing/`) — Phase 2, built
 
-The billing service. Not yet built (`app/services/invoicing/` is a package
-stub), so there is no `docs/services/invoicing/` reference tree yet — that
-lands with the code. The authoritative design lives in the service build plan
+The billing service. v1 is built and tested (77 tests, 98% package coverage,
+mounted at `/v1/invoicing`) — see the build plan
 [`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md)
-(data model, HTTP surface, state machine, Core dependency map), with the short
-roadmap in [`phase2-invoicing.md`](phase2-invoicing.md).
+(data model, HTTP surface, state machine, Core dependency map) for what
+shipped, with the short roadmap in
+[`phase2-invoicing.md`](phase2-invoicing.md). There is no
+`docs/services/invoicing/` reference tree yet — that's the one remaining
+Definition-of-Done item (CLAUDE.md §16), tracked so this page doesn't drift
+the way `docs/services/omnichannel/known-issues.md` warns against.
 
 ## Cross-cutting references
 
@@ -75,7 +78,7 @@ roadmap in [`phase2-invoicing.md`](phase2-invoicing.md).
 | [`zero-trust.md`](zero-trust.md) | Zero Trust API policy: the per-request verification pipeline, endpoint classes, never-trust rules, per-endpoint checklist |
 | [`cost-notes.md`](cost-notes.md) | AWS cost posture and thresholds to revisit |
 | [`omnichannel-decisions.md`](omnichannel-decisions.md) | Recorded product/engineering decisions for Omni-Channel |
-| [`phase2-invoicing.md`](phase2-invoicing.md) | Kickoff roadmap for the not-yet-built Invoicing service |
+| [`phase2-invoicing.md`](phase2-invoicing.md) | Kickoff roadmap for the Invoicing service (v1 built — see `app/services/invoicing/CLAUDE.md`) |
 | [`potential-additions.md`](potential-additions.md) | Candidate future Core capabilities |
 
 ## Authoritative specs (outside `docs/`)

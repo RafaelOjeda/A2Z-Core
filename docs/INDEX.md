@@ -30,7 +30,7 @@ description of current code.
 | Run something locally / a helper script | [scripts.md](scripts.md), [`../README.md`](../README.md) |
 | Understand deploy / CI | [architecture/deployment.md](architecture/deployment.md), [ci-cd.md](ci-cd.md), [`../infra/README.md`](../infra/README.md) |
 | Know a retention / cost / product decision | [retention.md](retention.md), [cost-notes.md](cost-notes.md), [omnichannel-decisions.md](omnichannel-decisions.md) |
-| Start Invoicing (Phase 2) | [`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) (design) + [phase2-invoicing.md](phase2-invoicing.md) (roadmap) |
+| Work on Invoicing (Phase 2, built) | [`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) (design + current state) + [phase2-invoicing.md](phase2-invoicing.md) (roadmap) |
 | Split the monolith later | [architecture/microservices-distribution.md](architecture/microservices-distribution.md) |
 
 ---
@@ -76,9 +76,10 @@ description of current code.
 | [api-reference.md](services/omnichannel/api-reference.md) | Every `/v1/omnichannel/*` route |
 | **[known-issues.md](services/omnichannel/known-issues.md)** | **Documented drift between the design doc and the implementation — read regardless of task** |
 
-## Invoicing service (Phase 2 — not yet built)
+## Invoicing service (Phase 2 — built)
 
-No `docs/services/invoicing/` tree yet (it lands with the code). Design and roadmap:
+No `docs/services/invoicing/` tree yet (the one open Definition-of-Done item,
+CLAUDE.md §16) — design, current state, and roadmap:
 
 | Doc | Covers |
 |---|---|
@@ -105,7 +106,7 @@ No `docs/services/invoicing/` tree yet (it lands with the code). Design and road
 | [retention.md](retention.md) | TTL/lifecycle policy per data store |
 | [cost-notes.md](cost-notes.md) | AWS cost posture and thresholds to revisit |
 | [omnichannel-decisions.md](omnichannel-decisions.md) | Product/engineering decisions for Omni-Channel |
-| [phase2-invoicing.md](phase2-invoicing.md) | Kickoff roadmap for the not-yet-built Invoicing service |
+| [phase2-invoicing.md](phase2-invoicing.md) | Kickoff roadmap for the Invoicing service (v1 built — see `app/services/invoicing/CLAUDE.md`) |
 | [potential-additions.md](potential-additions.md) | Candidate future Core capabilities |
 
 ## Authoritative specs (outside `docs/`)

@@ -15,6 +15,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
     "alembic>=1.13",
+    "reportlab>=4.1",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +29,7 @@ dev = [
     "mypy>=1.9",
     "boto3-stubs[dynamodb,s3,ses,sns,events,secretsmanager,sqs,cloudwatch]>=1.34",
     "types-redis>=4.6",
+    "types-reportlab>=4.2",
 ]
 
 [build-system]
@@ -73,8 +75,9 @@ markers = [
 addopts = "-ra"
 
 [tool.coverage.run]
-# Both packages carry their own >=90% bar (root CLAUDE.md §15 for core;
-# app/services/omnichannel/CLAUDE.md §16 for the service). CI reports them
-# separately from one run so a dip in either can't be masked by the other.
-source = ["app/core", "app/services/omnichannel"]
+# Each package carries its own >=90% bar (root CLAUDE.md §15 for core;
+# app/services/omnichannel/CLAUDE.md §16 and app/services/invoicing/CLAUDE.md
+# §16 for the services). CI reports them separately from one run so a dip in
+# one can't be masked by the others.
+source = ["app/core", "app/services/omnichannel", "app/services/invoicing"]
 branch = true

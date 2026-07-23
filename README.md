@@ -72,7 +72,7 @@ app/
   core/                # ★ the platform packages (frozen — see docs/core/)
   services/
     omnichannel/       # the first product service built on Core (see docs/services/omnichannel/)
-    invoicing/         # stub — Phase 2, not yet built (design: app/services/invoicing/CLAUDE.md; roadmap: docs/phase2-invoicing.md)
+    invoicing/         # Phase 2, v1 built (see app/services/invoicing/CLAUDE.md; roadmap: docs/phase2-invoicing.md)
   routers/             # thin HTTP layer over core/services
   lambdas/             # out-of-band handlers (Cognito, SES/SNS)
 infra/                 # Terragrunt (modules + migrations)
@@ -120,11 +120,14 @@ Gap-closure progress (verified evidence per phase):
   compositions with `dependency` wiring and the previously missing `ses` live
   composition. `terraform fmt` clean; `terraform validate` runs in the CI infra
   job (provider downloads are policy-blocked in the dev sandbox).
-- **Phase F — Invoicing kickoff**: detailed design finalized 2026-07-22 in
-  `app/services/invoicing/CLAUDE.md` (data model, HTTP surface, state machine,
-  Core dependency map), with the short roadmap in `docs/phase2-invoicing.md`.
-  Invoicing is a service that imports Core, never the reverse, and needs no Core
-  change; no invoicing code lands until it's built out.
+- **Phase F — Invoicing built (2026-07-23)**: v1 implemented per the design
+  finalized 2026-07-22 in `app/services/invoicing/CLAUDE.md` (data model, HTTP
+  surface at `/v1/invoicing`, state machine, Core dependency map) — 77 tests,
+  98% package coverage, `ruff` + `mypy --strict` clean, no Core/Omni-Channel
+  regressions (350 tests green repo-wide). Short roadmap in
+  `docs/phase2-invoicing.md`. Invoicing imports Core, never the reverse, and
+  needed no Core change. Remaining: the `docs/services/invoicing/` reference
+  tree (CLAUDE.md §16).
 - **Phase G — DoD closure**: CLAUDE.md §15 checklist fully ticked with
   evidence; Core is frozen. Remaining infra deferrals (ACM/HTTPS, Route53,
   RDS) are listed in `infra/README.md` and arrive with deployment/Phase 2.

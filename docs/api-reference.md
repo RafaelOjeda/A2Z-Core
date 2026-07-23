@@ -3,7 +3,7 @@
 > Part of the [documentation index](README.md). See also: [request lifecycle](architecture/request-lifecycle.md), [Omni-Channel API reference](services/omnichannel/api-reference.md).
 > **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
-`app/main.py` mounts three routers. All are **thin** — they parse the
+`app/main.py` mounts four routers. All are **thin** — they parse the
 request and call into `core`/service code (`CLAUDE.md` §2); no business
 logic lives in a router.
 
@@ -48,6 +48,25 @@ sending email directly against Core.
 See the full [Omni-Channel API reference](services/omnichannel/api-reference.md)
 for every route (webhooks, connections, inbox reads, sending, assignment,
 the SSE stream).
+
+## `routers/invoicing.py` — prefix `/v1/invoicing`, requires `Authorization: Bearer <jwt>`
+
+Invoice CRUD and lifecycle transitions. Mutations require OWNER/ADMIN; reads
+are open to any member. See
+[`app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) §9
+for full request/response schemas.
+
+| Route | Method | Auth | Notes |
+|---|---|---|---|
+| `/v1/invoicing/orgs/{org_id}/invoices` | POST | OWNER/ADMIN | Create a `draft`; assigns `INV-YYYY-NNNNNN` via Core's atomic counter |
+| `/v1/invoicing/orgs/{org_id}/invoices` | GET | member (any role) | List (excl. soft-deleted), newest first; `?status=`, `?skip=`, `?limit=` |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}` | GET | member (any role) | Full detail incl. line items and a 1-hour signed PDF URL |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}` | PATCH | OWNER/ADMIN | Edit in place; allowed on any non-`void` invoice |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}` | DELETE | OWNER/ADMIN | Soft delete, any state, idempotent |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}/send` | POST | OWNER/ADMIN | `{recipient_email}` → renders a fresh PDF, uploads it, emails it as an attachment. Only valid from `draft` |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}/record-payment` | POST | OWNER/ADMIN | `{amount_cents, payment_date, payment_method?, reference?, notes?, idempotency_key?}` |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}/void` | POST | OWNER/ADMIN | `{reason}` → terminal from any non-`void` state |
+| `/v1/invoicing/orgs/{org_id}/invoices/{invoice_id}/payments` | GET | member (any role) | List recorded payments |
 
 ## Error responses
 

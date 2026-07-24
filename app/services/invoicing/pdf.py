@@ -1,243 +1,127 @@
-"""PDF generation for invoices.
+"""Invoice PDF rendering (§9.1, §14).
 
-Renders an invoice as HTML, converts to PDF, and uploads to S3.
+**Open decision resolved:** ``reportlab`` was chosen over ``weasyprint`` for
+the new dependency (§14 of the design doc) -- pure Python, no system
+libraries (cairo/pango) required, which keeps the Docker image and CI
+runners simple. A fresh PDF is rendered on every ``send`` (§3.1's decision),
+never cached across sends.
+
+The org's customer-facing display name comes from
+``OrgSettings.sender_name`` (already used for the email "From" display name
+per root CLAUDE.md §8) -- not a new Core field.
 """
 
 from __future__ import annotations
 
 from io import BytesIO
 
-from app.core.storage import upload_file
-from app.services.invoicing.exceptions import PDFGenerationError
-from app.services.invoicing.models import InvoiceRead
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+from app.core.settings import OrgSettings
+from app.services.invoicing.models import Invoice, InvoiceLineItem
 
 
-async def generate_and_upload_invoice_pdf(
-    org_id: str,
-    invoice: InvoiceRead,
-) -> str:
-    """Generate a PDF for an invoice and upload it to S3.
+def _money(cents: int, currency_code: str) -> str:
+    return f"{currency_code} {cents / 100:,.2f}"
 
-    Args:
-        org_id: The org owner.
-        invoice: The invoice to render.
 
-    Returns:
-        The S3 key where the PDF was stored.
+def render_invoice_pdf(
+    invoice: Invoice,
+    line_items: list[InvoiceLineItem],
+    *,
+    org_settings: OrgSettings,
+) -> bytes:
+    """Render an invoice to a PDF and return its bytes.
 
-    Raises:
-        PDFGenerationError: If PDF generation fails.
+    Performance target: comparable to Core's storage/email budgets -- this is
+    a synchronous, in-memory render (no external process), typically well
+    under 500ms for a normal-sized invoice.
     """
-    try:
-        import weasyprint
-    except ImportError as e:
-        raise PDFGenerationError("weasyprint not installed; cannot generate PDF") from e
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=LETTER,
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
+        topMargin=0.75 * inch,
+        bottomMargin=0.75 * inch,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("InvoiceTitle", parent=styles["Title"], alignment=0)
+    normal = styles["Normal"]
 
-    # Render invoice as HTML
-    html_content = _render_invoice_html(invoice)
+    sender_name = org_settings.sender_name or invoice.org_id
+    elements = [
+        Paragraph(sender_name, title_style),
+        Paragraph(f"Invoice {invoice.invoice_number}", styles["Heading2"]),
+        Spacer(1, 12),
+        Paragraph(f"Invoice date: {invoice.invoice_date.isoformat()}", normal),
+    ]
+    if invoice.due_date:
+        elements.append(Paragraph(f"Due date: {invoice.due_date.isoformat()}", normal))
+    if invoice.payment_terms:
+        elements.append(Paragraph(f"Terms: {invoice.payment_terms}", normal))
+    elements.append(Spacer(1, 12))
 
-    # Convert HTML to PDF
-    try:
-        pdf_bytes = weasyprint.HTML(string=html_content).write_pdf()
-    except Exception as e:
-        raise PDFGenerationError(f"PDF generation failed: {e}") from e
+    bill_to_lines = [invoice.customer_name]
+    if invoice.customer_company:
+        bill_to_lines.append(invoice.customer_company)
+    bill_to_lines.append(invoice.customer_email)
+    elements.append(Paragraph("Bill to:", styles["Heading4"]))
+    for line in bill_to_lines:
+        elements.append(Paragraph(line, normal))
+    elements.append(Spacer(1, 16))
 
-    # Upload to S3 via core.storage
-    file_key = f"{org_id}/invoicing/{invoice.invoice_id}.pdf"
-    pdf_bytes_io = BytesIO(pdf_bytes)
-
-    try:
-        result = await upload_file(
-            org_id=org_id,
-            service_type="invoicing",
-            file_key=file_key,
-            file_content=pdf_bytes_io,
-            content_type="application/pdf",
-            ttl_days=365,  # 1-year retention per docs/retention.md
+    table_data = [["Description", "Qty", "Unit price", "Amount"]]
+    for item in line_items:
+        table_data.append(
+            [
+                item.description,
+                str(item.quantity),
+                _money(item.unit_price_cents, invoice.currency_code),
+                _money(item.amount_cents, invoice.currency_code),
+            ]
         )
-        return result.key
-    except Exception as e:
-        raise PDFGenerationError(f"Failed to upload PDF to S3: {e}") from e
+    items_table = Table(table_data, colWidths=[3.2 * inch, 0.8 * inch, 1.2 * inch, 1.2 * inch])
+    items_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ]
+        )
+    )
+    elements.append(items_table)
+    elements.append(Spacer(1, 16))
 
+    totals_data = [
+        ["Subtotal", _money(invoice.subtotal_cents, invoice.currency_code)],
+        ["Tax", _money(invoice.tax_cents, invoice.currency_code)],
+        ["Discount", f"-{_money(invoice.discount_cents, invoice.currency_code)}"],
+        ["Total", _money(invoice.total_cents, invoice.currency_code)],
+    ]
+    totals_table = Table(totals_data, colWidths=[4.4 * inch, 1.2 * inch])
+    totals_table.setStyle(
+        TableStyle(
+            [
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.75, colors.black),
+            ]
+        )
+    )
+    elements.append(totals_table)
 
-def _render_invoice_html(invoice: InvoiceRead) -> str:
-    """Render an invoice as HTML suitable for PDF conversion.
+    if invoice.notes:
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("Notes", styles["Heading4"]))
+        elements.append(Paragraph(invoice.notes, normal))
 
-    Simple template; can be enhanced with CSS for branding later.
-    """
-    line_items_html = ""
-    for item in invoice.line_items:
-        line_items_html += f"""
-        <tr>
-            <td>{item.description}</td>
-            <td style="text-align: right;">{item.quantity}</td>
-            <td style="text-align: right;">${item.unit_price_cents / 100:.2f}</td>
-            <td style="text-align: right;">${item.amount_cents / 100:.2f}</td>
-        </tr>
-        """
-
-    subtotal = invoice.subtotal_cents / 100
-    tax = invoice.tax_cents / 100
-    discount = invoice.discount_cents / 100
-    total = invoice.total_cents / 100
-    paid = invoice.paid_cents / 100
-    balance = total - paid
-
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>Invoice {invoice.invoice_number}</title>
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                margin: 40px;
-                color: #333;
-            }}
-            .header {{
-                margin-bottom: 40px;
-            }}
-            .invoice-number {{
-                font-size: 24px;
-                font-weight: bold;
-                color: #2c3e50;
-            }}
-            .invoice-date {{
-                font-size: 12px;
-                color: #7f8c8d;
-                margin-top: 5px;
-            }}
-            .customer-info {{
-                margin-top: 30px;
-                margin-bottom: 30px;
-            }}
-            .customer-name {{
-                font-weight: bold;
-                font-size: 14px;
-            }}
-            .customer-detail {{
-                font-size: 12px;
-                color: #7f8c8d;
-                margin: 3px 0;
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 20px;
-                margin-bottom: 20px;
-            }}
-            table th {{
-                background-color: #ecf0f1;
-                padding: 10px;
-                text-align: left;
-                border-bottom: 2px solid #bdc3c7;
-                font-weight: bold;
-            }}
-            table td {{
-                padding: 10px;
-                border-bottom: 1px solid #ecf0f1;
-            }}
-            .totals {{
-                margin-left: auto;
-                width: 300px;
-                margin-top: 20px;
-            }}
-            .totals-row {{
-                display: flex;
-                justify-content: space-between;
-                padding: 8px 0;
-                font-size: 12px;
-            }}
-            .totals-row.total {{
-                border-top: 2px solid #2c3e50;
-                border-bottom: 2px solid #2c3e50;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 10px 0;
-            }}
-            .amount {{
-                text-align: right;
-                font-weight: bold;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <div class="invoice-number">Invoice {invoice.invoice_number}</div>
-            <div class="invoice-date">Date: {invoice.invoice_date.strftime("%B %d, %Y")}</div>
-            <div class="invoice-date">Due: {invoice.due_date.strftime("%B %d, %Y")}</div>
-        </div>
-
-        <div class="customer-info">
-            <div class="customer-name">{invoice.customer_name}</div>
-            {
-        f'<div class="customer-detail">{invoice.customer_company}</div>'
-        if invoice.customer_company
-        else ""
-    }
-            <div class="customer-detail">{invoice.customer_email}</div>
-            {
-        f'<div class="customer-detail">Terms: {invoice.payment_terms}</div>'
-        if invoice.payment_terms
-        else ""
-    }
-        </div>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Description</th>
-                    <th style="text-align: right;">Quantity</th>
-                    <th style="text-align: right;">Unit Price</th>
-                    <th style="text-align: right;">Amount</th>
-                </tr>
-            </thead>
-            <tbody>
-                {line_items_html}
-            </tbody>
-        </table>
-
-        <div class="totals">
-            <div class="totals-row">
-                <span>Subtotal:</span>
-                <span class="amount">${subtotal:.2f}</span>
-            </div>
-            {
-        f'<div class="totals-row"><span>Tax:</span><span class="amount">${tax:.2f}</span></div>'
-        if tax > 0
-        else ""
-    }
-            {
-        f'<div class="totals-row"><span>Discount:</span>'
-        f'<span class="amount">-${discount:.2f}</span></div>'
-        if discount > 0
-        else ""
-    }
-            <div class="totals-row total">
-                <span>Total Due:</span>
-                <span class="amount">${total:.2f}</span>
-            </div>
-            {
-        f'<div class="totals-row"><span>Paid:</span><span class="amount">${paid:.2f}</span></div>'
-        if paid > 0
-        else ""
-    }
-            {
-        f'<div class="totals-row"><span>Balance:</span>'
-        f'<span class="amount">${balance:.2f}</span></div>'
-        if balance > 0
-        else ""
-    }
-        </div>
-
-        {
-        f'<div style="margin-top: 40px; font-size: 12px; '
-        f'color: #7f8c8d;"><strong>Notes:</strong><br/>'
-        f"{invoice.notes}</div>"
-        if invoice.notes
-        else ""
-    }
-    </body>
-    </html>
-    """
+    doc.build(elements)
+    return buffer.getvalue()

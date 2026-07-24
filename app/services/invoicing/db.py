@@ -1,8 +1,8 @@
-"""Async SQLAlchemy engine/session for Invoicing's Postgres data layer.
+"""Async SQLAlchemy engine/session for Invoicing (app/services/invoicing/CLAUDE.md §7).
 
-Shared Postgres instance — a container on the single-EC2 MVP box, RDS at
-distribution — in the dedicated ``invoicing`` schema. Core never touches
-this schema; Core tables live in DynamoDB.
+Same shared Postgres instance as Omni-Channel, different schema
+(``invoicing`` vs. ``omnichannel``) -- one ``DATABASE_URL``, one engine
+factory per service, mirroring ``app/services/omnichannel/db.py`` exactly.
 """
 
 from __future__ import annotations
@@ -46,6 +46,6 @@ async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
 
 
 def reset_engine() -> None:
-    """For tests: clear the cached engine so the next test gets a fresh one."""
+    """Clear the cached engine/session factory. Used by tests between runs."""
     engine.cache_clear()
     session_factory.cache_clear()

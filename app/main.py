@@ -33,7 +33,7 @@ app = FastAPI(title="A2Z Core", version="0.1.0")
 app.include_router(health.router)
 app.include_router(core_admin.router, prefix="/v1")
 app.include_router(omnichannel.router, prefix="/v1")
-app.include_router(invoicing.router)
+app.include_router(invoicing.router, prefix="/v1")
 
 
 @app.middleware("http")

@@ -3,7 +3,8 @@
 The database URL always comes from ``app.config.settings()`` (``DATABASE_URL``)
 -- never duplicated into ``alembic.ini`` -- so there is exactly one place
 that knows how to reach Postgres, matching the ``core.clients`` singleton
-pattern used for every other backing store.
+pattern used for every other backing store. Mirrors
+``app/services/omnichannel/migrations/env.py`` exactly, schema swapped.
 
 The ``invoicing`` schema (and Alembic's own version-tracking table inside
 it) is created explicitly before migrations run, since Alembic can't create

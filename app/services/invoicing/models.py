@@ -1,216 +1,166 @@
-"""SQLAlchemy ORM models for the invoicing schema.
+"""Invoicing's Postgres data model (app/services/invoicing/CLAUDE.md §7).
 
-All tables carry org_id as the first column and every query filters on it
-(golden rule #2). Money is stored as integer cents, never floats.
+Three tables in the ``invoicing`` schema on the shared Postgres instance,
+every table ``org_id``-scoped first (root golden rule #2). Money is stored as
+integer cents (``BigInteger``) -- never floats -- per the design's explicit
+decision. Status columns are ``Text``, never a Postgres ``ENUM``: adding a new
+status or payment method must never require a schema migration, mirroring
+Omni-Channel's ``channel_type``/``status`` convention (see
+``app/services/omnichannel/models.py``).
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
 
-from pydantic import BaseModel, Field
 from sqlalchemy import (
-    DATE,
-    DECIMAL,
-    TIMESTAMP,
     BigInteger,
+    Boolean,
+    Date,
+    DateTime,
     ForeignKey,
+    Index,
+    MetaData,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    """Base class for all Invoicing ORM models."""
+    metadata = MetaData(schema="invoicing")
 
-    pass
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+class InvoiceStatus(str, Enum):
+    """Invoice lifecycle status (§3.1). Linear, no backtracking; ``void`` is
+    terminal and reachable from any other state."""
+
+    DRAFT = "draft"
+    SENT = "sent"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
+    VOID = "void"
+
+
+class PaymentStatus(str, Enum):
+    """Denormalized payment-progress mirror of ``InvoiceStatus`` (§7), kept in
+    sync on every ``record_payment`` call so "who owes me" queries don't need
+    to interpret the full lifecycle status."""
+
+    UNPAID = "unpaid"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
 
 
 class Invoice(Base):
-    """An invoice: the billable document with line items and payments."""
+    """An invoice header (§7). Owns many line items and many payments."""
 
     __tablename__ = "invoices"
-    __table_args__ = (UniqueConstraint("org_id", "invoice_number", name="uq_org_invoice_number"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "invoice_number", name="uq_invoice_number"),
+        Index("ix_invoices_org_created", "org_id", "created_at"),
+        Index("ix_invoices_org_status", "org_id", "status"),
+        Index("ix_invoices_org_due_date", "org_id", "due_date"),
+    )
 
-    org_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    invoice_id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    invoice_number: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default=InvoiceStatus.DRAFT.value)
 
-    invoice_number: Mapped[str] = mapped_column(String(50))
-    status: Mapped[str] = mapped_column(String(50))  # draft, sent, partially_paid, paid, void
+    # Customer details -- stored inline in v1 (no separate customer entity, §15).
+    customer_email: Mapped[str] = mapped_column(Text, nullable=False)
+    customer_name: Mapped[str] = mapped_column(Text, nullable=False)
+    customer_company: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    customer_name: Mapped[str] = mapped_column(String(255))
-    customer_email: Mapped[str] = mapped_column(String(255))
-    customer_company: Mapped[str] = mapped_column(String(255), nullable=True)
+    invoice_date: Mapped[date] = mapped_column(Date, nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    payment_terms: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    invoice_date: Mapped[date] = mapped_column(DATE)
-    due_date: Mapped[date] = mapped_column(DATE)
-    payment_terms: Mapped[str] = mapped_column(String(255), nullable=True)
+    # Money as integer cents -- never floats (§7).
+    subtotal_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    tax_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    discount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    total_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    amount_paid_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    payment_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default=PaymentStatus.UNPAID.value
+    )
 
-    subtotal_cents: Mapped[int] = mapped_column(BigInteger)
-    tax_cents: Mapped[int] = mapped_column(BigInteger)
-    discount_cents: Mapped[int] = mapped_column(BigInteger)
-    total_cents: Mapped[int] = mapped_column(BigInteger)
+    # Org default in v1 -- per-invoice currency override is Phase 3 (§15).
+    currency_code: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    paid_cents: Mapped[int] = mapped_column(BigInteger, default=0)
-    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    pdf_s3_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    pdf_key: Mapped[str] = mapped_column(String(500), nullable=True)  # S3 key
-    sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
-    void_reason: Mapped[str] = mapped_column(String(500), nullable=True)
-    voided_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP, server_default=func.now(), onupdate=func.now()
-    )
-
-    # Relationships
-    line_items: Mapped[list[InvoiceLineItem]] = relationship(
-        "InvoiceLineItem", back_populates="invoice", cascade="all, delete-orphan"
-    )
-    payments: Mapped[list[InvoicePayment]] = relationship(
-        "InvoicePayment", back_populates="invoice", cascade="all, delete-orphan"
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
 class InvoiceLineItem(Base):
-    """One billable row on an invoice."""
+    """One billable row on an invoice (§7)."""
 
     __tablename__ = "invoice_line_items"
+    __table_args__ = (Index("ix_line_items_org_invoice", "org_id", "invoice_id"),)
 
-    org_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    line_item_id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID
-
-    invoice_id: Mapped[str] = mapped_column(String(36), ForeignKey("invoices.invoice_id"))
-
-    description: Mapped[str] = mapped_column(String(500))
-    quantity: Mapped[Decimal] = mapped_column(DECIMAL(15, 4))
-    unit_price_cents: Mapped[int] = mapped_column(BigInteger)
-    amount_cents: Mapped[int] = mapped_column(BigInteger)
-
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
-
-    # Relationship
-    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="line_items")
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    invoice_id: Mapped[str] = mapped_column(
+        String, ForeignKey("invoicing.invoices.id"), nullable=False
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_price_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Denormalized: quantity * unit_price_cents, rounded to the nearest cent.
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class InvoicePayment(Base):
-    """One recorded receipt against an invoice."""
+    """A payment recorded against an invoice (§7). Invoice-level only in v1
+    (no line-item attribution, §15). ``payment_method``/``idempotency_key``
+    make this webhook-ready for Phase 3 Stripe/PayPal without a migration."""
 
     __tablename__ = "invoice_payments"
+    __table_args__ = (
+        Index("ix_payments_org_invoice", "org_id", "invoice_id"),
+        Index(
+            "uq_payments_org_idempotency_key",
+            "org_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
-    org_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    payment_id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID
-
-    invoice_id: Mapped[str] = mapped_column(String(36), ForeignKey("invoices.invoice_id"))
-
-    amount_cents: Mapped[int] = mapped_column(BigInteger)
-    payment_date: Mapped[date] = mapped_column(DATE)
-    method: Mapped[str] = mapped_column(String(50))  # check, ach, credit_card, cash, other
-    reference: Mapped[str] = mapped_column(String(255), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
-
-    # Relationship
-    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="payments")
-
-
-# Pydantic DTOs (for API requests/responses)
-
-
-class LineItemCreate(BaseModel):
-    """Input for creating a line item."""
-
-    description: str = Field(..., min_length=1, max_length=500)
-    quantity: Decimal = Field(..., gt=0, decimal_places=4)
-    unit_price_cents: int = Field(..., gt=0)
-
-
-class LineItemRead(BaseModel):
-    """Output when reading a line item."""
-
-    line_item_id: str
-    description: str
-    quantity: Decimal
-    unit_price_cents: int
-    amount_cents: int
-
-
-class InvoiceCreate(BaseModel):
-    """Input for creating an invoice."""
-
-    customer_name: str = Field(..., min_length=1, max_length=255)
-    customer_email: str = Field(..., min_length=1, max_length=255)
-    customer_company: str | None = Field(None, max_length=255)
-
-    invoice_date: date
-    due_date: date
-    payment_terms: str | None = Field(None, max_length=255)
-
-    tax_cents: int = Field(default=0, ge=0)
-    discount_cents: int = Field(default=0, ge=0)
-    notes: str | None = None
-
-    line_items: list[LineItemCreate] = Field(..., min_items=1)
-
-
-class InvoiceUpdate(BaseModel):
-    """Input for updating an invoice (draft only)."""
-
-    customer_name: str | None = Field(None, min_length=1, max_length=255)
-    customer_email: str | None = Field(None, min_length=1, max_length=255)
-    customer_company: str | None = Field(None, max_length=255)
-
-    invoice_date: date | None = None
-    due_date: date | None = None
-    payment_terms: str | None = Field(None, max_length=255)
-
-    tax_cents: int | None = Field(None, ge=0)
-    discount_cents: int | None = Field(None, ge=0)
-    notes: str | None = None
-
-    line_items: list[LineItemCreate] | None = None
-
-
-class PaymentCreate(BaseModel):
-    """Input for recording a payment."""
-
-    amount_cents: int = Field(..., gt=0)
-    payment_date: date
-    method: str = Field(..., min_length=1, max_length=50)
-    reference: str | None = Field(None, max_length=255)
-
-
-class InvoiceRead(BaseModel):
-    """Output when reading an invoice."""
-
-    invoice_id: str
-    invoice_number: str
-    status: str
-    customer_name: str
-    customer_email: str
-    customer_company: str | None
-
-    invoice_date: date
-    due_date: date
-    payment_terms: str | None
-
-    subtotal_cents: int
-    tax_cents: int
-    discount_cents: int
-    total_cents: int
-    paid_cents: int
-
-    notes: str | None
-    pdf_key: str | None
-    sent_at: datetime | None
-    void_reason: str | None
-    voided_at: datetime | None
-
-    line_items: list[LineItemRead]
-    created_at: datetime
-    updated_at: datetime
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    invoice_id: Mapped[str] = mapped_column(
+        String, ForeignKey("invoicing.invoices.id"), nullable=False
+    )
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    payment_method: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
+    reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[str] = mapped_column(String, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

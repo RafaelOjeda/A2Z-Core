@@ -1,15 +1,17 @@
 """Unit tests for invoicing domain logic (state machine, calculations)."""
 
+from decimal import Decimal
+
 import pytest
+
 from app.services.invoicing.domain import (
     InvoiceStatus,
-    can_transition,
     assert_transition_legal,
     calculate_invoice_totals,
+    can_transition,
     infer_invoice_status,
 )
 from app.services.invoicing.exceptions import InvalidStateTransitionError
-from decimal import Decimal
 
 
 class TestStateTransitions:
@@ -37,12 +39,25 @@ class TestStateTransitions:
 
     def test_any_to_void(self):
         """Any non-void state → void is legal."""
-        for status in [InvoiceStatus.DRAFT, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID]:
+        statuses = [
+            InvoiceStatus.DRAFT,
+            InvoiceStatus.SENT,
+            InvoiceStatus.PARTIALLY_PAID,
+            InvoiceStatus.PAID,
+        ]
+        for status in statuses:
             assert can_transition(status, InvoiceStatus.VOID), f"Failed: {status} → void"
 
     def test_void_is_terminal(self):
         """Void → anything is illegal."""
-        for status in [InvoiceStatus.DRAFT, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID, InvoiceStatus.VOID]:
+        statuses = [
+            InvoiceStatus.DRAFT,
+            InvoiceStatus.SENT,
+            InvoiceStatus.PARTIALLY_PAID,
+            InvoiceStatus.PAID,
+            InvoiceStatus.VOID,
+        ]
+        for status in statuses:
             assert not can_transition(InvoiceStatus.VOID, status), f"Failed: void → {status}"
 
     def test_draft_no_payment_states(self):
@@ -115,25 +130,35 @@ class TestStatusInference:
 
     def test_no_payment_sent(self):
         """No payment leaves status as sent."""
-        status = infer_invoice_status(total_cents=10000, paid_cents=0, current_status=InvoiceStatus.SENT)
+        status = infer_invoice_status(
+            total_cents=10000, paid_cents=0, current_status=InvoiceStatus.SENT
+        )
         assert status == InvoiceStatus.SENT
 
     def test_partial_payment(self):
         """Partial payment moves to partially_paid."""
-        status = infer_invoice_status(total_cents=10000, paid_cents=3000, current_status=InvoiceStatus.SENT)
+        status = infer_invoice_status(
+            total_cents=10000, paid_cents=3000, current_status=InvoiceStatus.SENT
+        )
         assert status == InvoiceStatus.PARTIALLY_PAID
 
     def test_full_payment(self):
         """Full payment moves to paid."""
-        status = infer_invoice_status(total_cents=10000, paid_cents=10000, current_status=InvoiceStatus.SENT)
+        status = infer_invoice_status(
+            total_cents=10000, paid_cents=10000, current_status=InvoiceStatus.SENT
+        )
         assert status == InvoiceStatus.PAID
 
     def test_overpayment(self):
         """Overpayment is treated as paid."""
-        status = infer_invoice_status(total_cents=10000, paid_cents=15000, current_status=InvoiceStatus.SENT)
+        status = infer_invoice_status(
+            total_cents=10000, paid_cents=15000, current_status=InvoiceStatus.SENT
+        )
         assert status == InvoiceStatus.PAID
 
     def test_void_stays_void(self):
         """Void status never changes."""
-        status = infer_invoice_status(total_cents=10000, paid_cents=10000, current_status=InvoiceStatus.VOID)
+        status = infer_invoice_status(
+            total_cents=10000, paid_cents=10000, current_status=InvoiceStatus.VOID
+        )
         assert status == InvoiceStatus.VOID

@@ -5,12 +5,11 @@ Renders an invoice as HTML, converts to PDF, and uploads to S3.
 
 from __future__ import annotations
 
-from datetime import datetime
 from io import BytesIO
 
 from app.core.storage import upload_file
-from app.services.invoicing.models import InvoiceRead
 from app.services.invoicing.exceptions import PDFGenerationError
+from app.services.invoicing.models import InvoiceRead
 
 
 async def generate_and_upload_invoice_pdf(
@@ -31,8 +30,8 @@ async def generate_and_upload_invoice_pdf(
     """
     try:
         import weasyprint
-    except ImportError:
-        raise PDFGenerationError("weasyprint not installed; cannot generate PDF")
+    except ImportError as e:
+        raise PDFGenerationError("weasyprint not installed; cannot generate PDF") from e
 
     # Render invoice as HTML
     html_content = _render_invoice_html(invoice)
@@ -41,7 +40,7 @@ async def generate_and_upload_invoice_pdf(
     try:
         pdf_bytes = weasyprint.HTML(string=html_content).write_pdf()
     except Exception as e:
-        raise PDFGenerationError(f"PDF generation failed: {e}")
+        raise PDFGenerationError(f"PDF generation failed: {e}") from e
 
     # Upload to S3 via core.storage
     file_key = f"{org_id}/invoicing/{invoice.invoice_id}.pdf"
@@ -58,7 +57,7 @@ async def generate_and_upload_invoice_pdf(
         )
         return result.key
     except Exception as e:
-        raise PDFGenerationError(f"Failed to upload PDF to S3: {e}")
+        raise PDFGenerationError(f"Failed to upload PDF to S3: {e}") from e
 
 
 def _render_invoice_html(invoice: InvoiceRead) -> str:
@@ -172,9 +171,11 @@ def _render_invoice_html(invoice: InvoiceRead) -> str:
 
         <div class="customer-info">
             <div class="customer-name">{invoice.customer_name}</div>
-            {f'<div class="customer-detail">{invoice.customer_company}</div>' if invoice.customer_company else ''}
+            {f'<div class="customer-detail">{invoice.customer_company}</div>'
+            if invoice.customer_company else ''}
             <div class="customer-detail">{invoice.customer_email}</div>
-            {f'<div class="customer-detail">Terms: {invoice.payment_terms}</div>' if invoice.payment_terms else ''}
+            {f'<div class="customer-detail">Terms: {invoice.payment_terms}</div>'
+            if invoice.payment_terms else ''}
         </div>
 
         <table>
@@ -196,17 +197,43 @@ def _render_invoice_html(invoice: InvoiceRead) -> str:
                 <span>Subtotal:</span>
                 <span class="amount">${subtotal:.2f}</span>
             </div>
-            {f'<div class="totals-row"><span>Tax:</span><span class="amount">${tax:.2f}</span></div>' if tax > 0 else ''}
-            {f'<div class="totals-row"><span>Discount:</span><span class="amount">-${discount:.2f}</span></div>' if discount > 0 else ''}
+            {
+                f'<div class="totals-row"><span>Tax:</span>'
+                f'<span class="amount">${tax:.2f}</span></div>'
+                if tax > 0
+                else ''
+            }
+            {
+                f'<div class="totals-row"><span>Discount:</span>'
+                f'<span class="amount">-${discount:.2f}</span></div>'
+                if discount > 0
+                else ''
+            }
             <div class="totals-row total">
                 <span>Total Due:</span>
                 <span class="amount">${total:.2f}</span>
             </div>
-            {f'<div class="totals-row"><span>Paid:</span><span class="amount">${paid:.2f}</span></div>' if paid > 0 else ''}
-            {f'<div class="totals-row"><span>Balance:</span><span class="amount">${balance:.2f}</span></div>' if balance > 0 else ''}
+            {
+                f'<div class="totals-row"><span>Paid:</span>'
+                f'<span class="amount">${paid:.2f}</span></div>'
+                if paid > 0
+                else ''
+            }
+            {
+                f'<div class="totals-row"><span>Balance:</span>'
+                f'<span class="amount">${balance:.2f}</span></div>'
+                if balance > 0
+                else ''
+            }
         </div>
 
-        {f'<div style="margin-top: 40px; font-size: 12px; color: #7f8c8d;"><strong>Notes:</strong><br/>{invoice.notes}</div>' if invoice.notes else ''}
+        {
+            f'<div style="margin-top: 40px; font-size: 12px; '
+            f'color: #7f8c8d;"><strong>Notes:</strong><br/>'
+            f'{invoice.notes}</div>'
+            if invoice.notes
+            else ''
+        }
     </body>
     </html>
     """

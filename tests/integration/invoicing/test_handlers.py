@@ -1,9 +1,17 @@
 """Integration tests for invoicing handlers against a real Postgres."""
 
-import pytest
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
+from app.services.invoicing.domain import InvoiceStatus
+from app.services.invoicing.exceptions import (
+    InvalidLineItemError,
+    InvoiceNotFoundError,
+    InvoiceStatusError,
+    PDFGenerationError,
+)
 from app.services.invoicing.handlers import (
     create_invoice,
     get_invoice,
@@ -18,12 +26,6 @@ from app.services.invoicing.models import (
     LineItemCreate,
     PaymentCreate,
 )
-from app.services.invoicing.exceptions import (
-    InvoiceNotFoundError,
-    InvoiceStatusError,
-    InvalidLineItemError,
-)
-from app.services.invoicing.domain import InvoiceStatus
 
 
 @pytest.mark.asyncio
@@ -375,7 +377,6 @@ async def test_send_invoice_pdf_generation_error(pg_session):
     not be available in all environments. The error is graceful.
     """
     from app.services.invoicing.handlers import send_invoice
-    from app.services.invoicing.exceptions import PDFGenerationError
 
     org_id = "test-org"
     user_id = "test-user"
@@ -402,5 +403,5 @@ async def test_send_invoice_pdf_generation_error(pg_session):
     # Sending should fail if weasyprint is not installed
     # (This test documents the current state; once weasyprint is installed,
     # this test should be updated to mock S3/SES)
-    with pytest.raises(Exception):  # PDFGenerationError or other
+    with pytest.raises(PDFGenerationError):
         await send_invoice(org_id, created.invoice_id, user_id, "test@example.com")

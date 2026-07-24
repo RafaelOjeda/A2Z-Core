@@ -1,9 +1,12 @@
 """Integration tests for the complete invoice lifecycle and isolation."""
 
-import pytest
 from datetime import date
 from decimal import Decimal
 
+import pytest
+from sqlalchemy import select
+
+from app.services.invoicing.domain import InvoiceStatus
 from app.services.invoicing.handlers import (
     create_invoice,
     get_invoice,
@@ -11,14 +14,11 @@ from app.services.invoicing.handlers import (
     void_invoice,
 )
 from app.services.invoicing.models import (
+    Invoice,
     InvoiceCreate,
     LineItemCreate,
     PaymentCreate,
 )
-from app.services.invoicing.domain import InvoiceStatus
-from app.services.invoicing.exceptions import InvoiceStatusError
-from sqlalchemy import select, text
-from app.services.invoicing.models import Invoice
 
 
 @pytest.mark.asyncio
@@ -217,11 +217,10 @@ async def test_cross_org_isolation_update(pg_session):
 
     invoice1 = await create_invoice(org1, user_id, invoice_data, 1)
 
-    from app.services.invoicing.models import InvoiceUpdate
-    from app.services.invoicing.handlers import update_invoice
-
     # org2 should not be able to update org1's invoice
     from app.services.invoicing.exceptions import InvoiceNotFoundError
+    from app.services.invoicing.handlers import update_invoice
+    from app.services.invoicing.models import InvoiceUpdate
 
     update_data = InvoiceUpdate(customer_name="Hacked")
 

@@ -8,17 +8,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import log_audit, ActionType
-from app.core.email import send_email, ServiceType
+from app.core.audit import ActionType, log_audit
+from app.core.email import ServiceType, send_email
 from app.services.invoicing.db import get_session_context
 from app.services.invoicing.domain import (
     InvoiceStatus,
-    assert_transition_legal,
     calculate_invoice_totals,
     infer_invoice_status,
 )
@@ -29,13 +26,13 @@ from app.services.invoicing.exceptions import (
 )
 from app.services.invoicing.models import (
     Invoice,
+    InvoiceCreate,
     InvoiceLineItem,
     InvoicePayment,
-    InvoiceCreate,
-    InvoiceUpdate,
     InvoiceRead,
-    PaymentCreate,
+    InvoiceUpdate,
     LineItemRead,
+    PaymentCreate,
 )
 from app.services.invoicing.pdf import generate_and_upload_invoice_pdf
 
@@ -251,7 +248,11 @@ async def update_invoice(
     # If tax or discount changed, recalculate totals
     if data.tax_cents is not None or data.discount_cents is not None or data.line_items is not None:
         tax_cents = data.tax_cents if data.tax_cents is not None else invoice.tax_cents
-        discount_cents = data.discount_cents if data.discount_cents is not None else invoice.discount_cents
+        discount_cents = (
+            data.discount_cents
+            if data.discount_cents is not None
+            else invoice.discount_cents
+        )
 
         # If line items are provided, recalculate with them; else use existing
         if data.line_items is not None:
@@ -271,7 +272,9 @@ async def update_invoice(
                     (item.quantity, item.unit_price_cents) for item in existing_items
                 ]
 
-        subtotal_cents, total_cents = calculate_invoice_totals(line_item_tuples, tax_cents, discount_cents)
+        subtotal_cents, total_cents = calculate_invoice_totals(
+            line_item_tuples, tax_cents, discount_cents
+        )
         invoice.tax_cents = tax_cents
         invoice.discount_cents = discount_cents
         invoice.subtotal_cents = subtotal_cents
@@ -466,7 +469,12 @@ async def void_invoice(
     return await get_invoice(org_id, invoice_id)
 
 
-async def list_invoices(org_id: str, status_filter: str | None = None, limit: int = 50, offset: int = 0) -> list[InvoiceRead]:
+async def list_invoices(
+    org_id: str,
+    status_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[InvoiceRead]:
     """List invoices for an org, optionally filtered by status.
 
     Args:

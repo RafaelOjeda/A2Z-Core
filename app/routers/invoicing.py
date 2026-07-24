@@ -6,8 +6,6 @@ All auth (JWT) and membership checks happen via shared dependencies.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +13,7 @@ from app.core.auth import get_current_user_from_request
 from app.core.exceptions import CoreError
 from app.core.membership import get_membership
 from app.core.settings import get_next_invoice_number
+from app.services.invoicing.db import get_session
 from app.services.invoicing.handlers import (
     create_invoice,
     get_invoice,
@@ -30,9 +29,6 @@ from app.services.invoicing.models import (
     InvoiceUpdate,
     PaymentCreate,
 )
-from app.services.invoicing.db import get_session
-
-from app.core.exceptions import ForbiddenError
 
 router = APIRouter(prefix="/v1/invoicing", tags=["invoicing"])
 
@@ -41,7 +37,7 @@ async def check_access(
     org_id: str,
     request,
     required_role: str | None = None,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session),  # noqa: B008
 ) -> tuple[str, str]:
     """Check JWT, org membership, and optional role. Return (user_id, org_id).
 
@@ -82,9 +78,9 @@ async def create_invoice_endpoint(
     try:
         return await create_invoice(org_id, user_id, data, counter)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/orgs/{org_id}/invoices/{invoice_id}", response_model=InvoiceRead)
@@ -98,7 +94,7 @@ async def get_invoice_endpoint(
     try:
         return await get_invoice(org_id, invoice_id)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 @router.get("/orgs/{org_id}/invoices", response_model=list[InvoiceRead])
@@ -114,7 +110,7 @@ async def list_invoices_endpoint(
     try:
         return await list_invoices(org_id, status_filter=status, limit=limit, offset=offset)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 @router.patch("/orgs/{org_id}/invoices/{invoice_id}", response_model=InvoiceRead)
@@ -129,7 +125,7 @@ async def update_invoice_endpoint(
     try:
         return await update_invoice(org_id, invoice_id, user_id, data)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 @router.post("/orgs/{org_id}/invoices/{invoice_id}/payments", response_model=InvoiceRead)
@@ -144,7 +140,7 @@ async def record_payment_endpoint(
     try:
         return await record_payment(org_id, invoice_id, user_id, data)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 @router.post("/orgs/{org_id}/invoices/{invoice_id}/void", response_model=InvoiceRead)
@@ -159,7 +155,7 @@ async def void_invoice_endpoint(
     try:
         return await void_invoice(org_id, invoice_id, user_id, reason)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 @router.post("/orgs/{org_id}/invoices/{invoice_id}/send", response_model=InvoiceRead)
@@ -180,11 +176,11 @@ async def send_invoice_endpoint(
         invoice = await get_invoice(org_id, invoice_id)
         email = recipient_email or invoice.customer_email
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
     try:
         return await send_invoice(org_id, invoice_id, user_id, email)
     except CoreError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

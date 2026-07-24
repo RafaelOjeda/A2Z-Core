@@ -5,7 +5,6 @@ Pure functions; all I/O is passed in or returned, never assumed.
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -13,7 +12,7 @@ from typing import TYPE_CHECKING
 from app.services.invoicing.exceptions import InvalidStateTransitionError
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
+    pass
 
 
 class InvoiceStatus(str, Enum):
@@ -43,8 +42,16 @@ def can_transition(from_status: str, to_status: str) -> bool:
     if from_status == InvoiceStatus.VOID:
         return False
     if to_status == InvoiceStatus.VOID:
-        return from_status in {InvoiceStatus.DRAFT, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID}
-    if from_status == InvoiceStatus.DRAFT and to_status in {InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID}:
+        return from_status in {
+            InvoiceStatus.DRAFT,
+            InvoiceStatus.SENT,
+            InvoiceStatus.PARTIALLY_PAID,
+            InvoiceStatus.PAID,
+        }
+    if from_status == InvoiceStatus.DRAFT and to_status in {
+        InvoiceStatus.PARTIALLY_PAID,
+        InvoiceStatus.PAID,
+    }:
         return False
     if from_status == InvoiceStatus.PAID and to_status in {InvoiceStatus.PARTIALLY_PAID}:
         return False
@@ -52,9 +59,15 @@ def can_transition(from_status: str, to_status: str) -> bool:
         return True
     if from_status == InvoiceStatus.DRAFT and to_status == InvoiceStatus.SENT:
         return True
-    if from_status == InvoiceStatus.SENT and to_status in {InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID}:
+    if from_status == InvoiceStatus.SENT and to_status in {
+        InvoiceStatus.PARTIALLY_PAID,
+        InvoiceStatus.PAID,
+    }:
         return True
-    if from_status == InvoiceStatus.PARTIALLY_PAID and to_status in {InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID}:
+    if from_status == InvoiceStatus.PARTIALLY_PAID and to_status in {
+        InvoiceStatus.PARTIALLY_PAID,
+        InvoiceStatus.PAID,
+    }:
         return True
     return False
 

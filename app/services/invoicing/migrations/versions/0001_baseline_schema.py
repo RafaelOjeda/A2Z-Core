@@ -70,7 +70,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("org_id", "line_item_id"),
         schema="invoicing",
     )
-    op.create_index("ix_line_items_invoice", "invoice_line_items", ["invoice_id"], schema="invoicing")
+    op.create_index(
+        "ix_line_items_invoice", "invoice_line_items", ["invoice_id"], schema="invoicing"
+    )
 
     op.create_table(
         "invoice_payments",

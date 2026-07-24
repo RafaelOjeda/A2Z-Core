@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.exceptions import CoreError, RateLimitError
 from app.core.logging import get_logger, request_id_var
-from app.routers import core_admin, health, omnichannel, invoicing
+from app.routers import core_admin, health, invoicing, omnichannel
 
 log = get_logger("app.main")
 

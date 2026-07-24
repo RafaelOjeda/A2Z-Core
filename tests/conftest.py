@@ -80,6 +80,7 @@ async def pg_session():
     everything after the test.
     """
     from sqlalchemy import text
+
     from app.services.invoicing import db as invoicing_db
     from app.services.invoicing.models import Base
 

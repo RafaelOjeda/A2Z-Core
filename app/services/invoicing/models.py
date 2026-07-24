@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
 
+from pydantic import BaseModel, Field
 from sqlalchemy import (
-    DECIMAL,
     DATE,
+    DECIMAL,
     TIMESTAMP,
     BigInteger,
     ForeignKey,
@@ -22,8 +22,6 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-from pydantic import BaseModel, Field
 
 
 class Base(DeclarativeBase):
@@ -61,18 +59,20 @@ class Invoice(Base):
     notes: Mapped[str] = mapped_column(Text, nullable=True)
 
     pdf_key: Mapped[str] = mapped_column(String(500), nullable=True)  # S3 key
-    sent_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     void_reason: Mapped[str] = mapped_column(String(500), nullable=True)
-    voided_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    voided_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now()
+    )
 
     # Relationships
-    line_items: Mapped[list["InvoiceLineItem"]] = relationship(
+    line_items: Mapped[list[InvoiceLineItem]] = relationship(
         "InvoiceLineItem", back_populates="invoice", cascade="all, delete-orphan"
     )
-    payments: Mapped[list["InvoicePayment"]] = relationship(
+    payments: Mapped[list[InvoicePayment]] = relationship(
         "InvoicePayment", back_populates="invoice", cascade="all, delete-orphan"
     )
 
@@ -95,7 +95,7 @@ class InvoiceLineItem(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
 
     # Relationship
-    invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="line_items")
+    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="line_items")
 
 
 class InvoicePayment(Base):
@@ -116,7 +116,7 @@ class InvoicePayment(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
 
     # Relationship
-    invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
+    invoice: Mapped[Invoice] = relationship("Invoice", back_populates="payments")
 
 
 # Pydantic DTOs (for API requests/responses)
@@ -145,15 +145,15 @@ class InvoiceCreate(BaseModel):
 
     customer_name: str = Field(..., min_length=1, max_length=255)
     customer_email: str = Field(..., min_length=1, max_length=255)
-    customer_company: Optional[str] = Field(None, max_length=255)
+    customer_company: str | None = Field(None, max_length=255)
 
     invoice_date: date
     due_date: date
-    payment_terms: Optional[str] = Field(None, max_length=255)
+    payment_terms: str | None = Field(None, max_length=255)
 
     tax_cents: int = Field(default=0, ge=0)
     discount_cents: int = Field(default=0, ge=0)
-    notes: Optional[str] = None
+    notes: str | None = None
 
     line_items: list[LineItemCreate] = Field(..., min_items=1)
 
@@ -161,19 +161,19 @@ class InvoiceCreate(BaseModel):
 class InvoiceUpdate(BaseModel):
     """Input for updating an invoice (draft only)."""
 
-    customer_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    customer_email: Optional[str] = Field(None, min_length=1, max_length=255)
-    customer_company: Optional[str] = Field(None, max_length=255)
+    customer_name: str | None = Field(None, min_length=1, max_length=255)
+    customer_email: str | None = Field(None, min_length=1, max_length=255)
+    customer_company: str | None = Field(None, max_length=255)
 
-    invoice_date: Optional[date] = None
-    due_date: Optional[date] = None
-    payment_terms: Optional[str] = Field(None, max_length=255)
+    invoice_date: date | None = None
+    due_date: date | None = None
+    payment_terms: str | None = Field(None, max_length=255)
 
-    tax_cents: Optional[int] = Field(None, ge=0)
-    discount_cents: Optional[int] = Field(None, ge=0)
-    notes: Optional[str] = None
+    tax_cents: int | None = Field(None, ge=0)
+    discount_cents: int | None = Field(None, ge=0)
+    notes: str | None = None
 
-    line_items: Optional[list[LineItemCreate]] = None
+    line_items: list[LineItemCreate] | None = None
 
 
 class PaymentCreate(BaseModel):
@@ -182,7 +182,7 @@ class PaymentCreate(BaseModel):
     amount_cents: int = Field(..., gt=0)
     payment_date: date
     method: str = Field(..., min_length=1, max_length=50)
-    reference: Optional[str] = Field(None, max_length=255)
+    reference: str | None = Field(None, max_length=255)
 
 
 class InvoiceRead(BaseModel):
@@ -193,11 +193,11 @@ class InvoiceRead(BaseModel):
     status: str
     customer_name: str
     customer_email: str
-    customer_company: Optional[str]
+    customer_company: str | None
 
     invoice_date: date
     due_date: date
-    payment_terms: Optional[str]
+    payment_terms: str | None
 
     subtotal_cents: int
     tax_cents: int
@@ -205,11 +205,11 @@ class InvoiceRead(BaseModel):
     total_cents: int
     paid_cents: int
 
-    notes: Optional[str]
-    pdf_key: Optional[str]
-    sent_at: Optional[datetime]
-    void_reason: Optional[str]
-    voided_at: Optional[datetime]
+    notes: str | None
+    pdf_key: str | None
+    sent_at: datetime | None
+    void_reason: str | None
+    voided_at: datetime | None
 
     line_items: list[LineItemRead]
     created_at: datetime

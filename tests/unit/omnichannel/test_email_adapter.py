@@ -113,7 +113,10 @@ async def test_normalize_inbound_multipart_with_attachment() -> None:
     mime.attach(part)
 
     messages = await adapter.normalize_inbound(
-        {"raw_mime": mime.as_bytes(), "external_message_id": "ses-in-2"}
+        {
+            "raw_mime": mime.as_bytes(),
+            "external_message_id": "ses-in-2",
+        }
     )
 
     msg = messages[0]

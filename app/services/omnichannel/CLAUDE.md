@@ -445,7 +445,7 @@ Terragrunt modules (§12).
 ```python
 RATE_LIMITS: dict[str, tuple[int, int]] = {
     # ... existing entries ...
-    "omnichannel.whatsapp.send": (80, 1),      # Meta pair-rate ceiling; tune per tier
+    "omnichannel.whatsapp.send": (80, 1),  # Meta pair-rate ceiling; tune per tier
     # omnichannel.sms.send: add when SMS is un-deferred (§15) — provider throughput cap per org
     # email channel needs no new entry: core.email already enforces email.send
 }
@@ -502,17 +502,28 @@ Python 3.12 + FastAPI, same repo, same modular monolith.
 # app/services/omnichannel/adapters/base.py
 from typing import Any, Protocol, runtime_checkable
 
+
 @runtime_checkable
 class ChannelAdapter(Protocol):
     """Every channel implements this. One file per channel. Nothing else in
     the system may know which channel it's talking to beyond this contract."""
 
-    supported_features: "SupportedFeatures"  # templates, rich_media, typing_indicators, read_receipts
+    supported_features: (
+        "SupportedFeatures"  # templates, rich_media, typing_indicators, read_receipts
+    )
 
-    async def verify_inbound_signature(self, raw_body: bytes, headers: dict[str, str], secret: str) -> bool: ...
-    async def normalize_inbound(self, raw_payload: dict[str, Any]) -> list["NormalizedInboundMessage"]: ...
-    async def send_outbound(self, to: str, content: "OutboundContent", credentials: dict[str, Any]) -> "SendResult": ...
-    async def interpret_delivery_webhook(self, raw_payload: dict[str, Any]) -> list["DeliveryStatusUpdate"]: ...
+    async def verify_inbound_signature(
+        self, raw_body: bytes, headers: dict[str, str], secret: str
+    ) -> bool: ...
+    async def normalize_inbound(
+        self, raw_payload: dict[str, Any]
+    ) -> list["NormalizedInboundMessage"]: ...
+    async def send_outbound(
+        self, to: str, content: "OutboundContent", credentials: dict[str, Any]
+    ) -> "SendResult": ...
+    async def interpret_delivery_webhook(
+        self, raw_payload: dict[str, Any]
+    ) -> list["DeliveryStatusUpdate"]: ...
 ```
 
 Shared types are Pydantic models in `adapters/types.py`. Adding a channel =
@@ -525,12 +536,23 @@ changes.
 # app/services/omnichannel/exceptions.py
 from app.core.exceptions import CoreError
 
-class OmniChannelError(CoreError): ...                      # base, 500
-class ChannelAdapterError(OmniChannelError): ...            # 502
-class WebhookSignatureError(OmniChannelError): ...          # 401
-class RoutingError(OmniChannelError): ...                   # 400 (client input; see exceptions.py docstring)
-class CommissionError(OmniChannelError): ...                # 409
-class ConversationNotFoundError(OmniChannelError): ...      # 404
+
+class OmniChannelError(CoreError): ...  # base, 500
+
+
+class ChannelAdapterError(OmniChannelError): ...  # 502
+
+
+class WebhookSignatureError(OmniChannelError): ...  # 401
+
+
+class RoutingError(OmniChannelError): ...  # 400 (client input; see exceptions.py docstring)
+
+
+class CommissionError(OmniChannelError): ...  # 409
+
+
+class ConversationNotFoundError(OmniChannelError): ...  # 404
 ```
 
 Each sets `status_code` exactly as Core's errors do. `RateLimitError`,

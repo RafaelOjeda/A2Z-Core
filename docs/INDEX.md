@@ -78,11 +78,10 @@ description of current code.
 
 ## Invoicing service (Phase 2 — built)
 
-No `docs/services/invoicing/` tree yet (the one open Definition-of-Done item,
-CLAUDE.md §16) — design, current state, and roadmap:
-
 | Doc | Covers |
 |---|---|
+| [services/invoicing/README.md](services/invoicing/README.md) | Service overview, architecture, implementation status |
+| [services/invoicing/api-reference.md](services/invoicing/api-reference.md) | HTTP endpoints, request/response shapes, error codes |
 | [`../app/services/invoicing/CLAUDE.md`](../app/services/invoicing/CLAUDE.md) | Authoritative design: data model, HTTP surface, state machine, Core dependency map |
 | [phase2-invoicing.md](phase2-invoicing.md) | Short kickoff roadmap / build order |
 

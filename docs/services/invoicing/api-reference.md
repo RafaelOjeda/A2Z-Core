@@ -1,7 +1,7 @@
 # Invoicing Service API Reference
 
 > Part of the [Invoicing service docs](README.md). For the complete design, see
-> [`app/services/invoicing/CLAUDE.md`](../../app/services/invoicing/CLAUDE.md).
+> [`app/services/invoicing/CLAUDE.md`](../../../app/services/invoicing/CLAUDE.md).
 
 ## Base URL
 

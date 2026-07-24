@@ -10,9 +10,9 @@ Invoicing owns its own Postgres tables and invoice state machine; everything els
 
 ## Documentation
 
-- **[Design & Build Plan](../../app/services/invoicing/CLAUDE.md)** — detailed product definition, state machine, Core dependency map, build order, scope decisions
+- **[Design & Build Plan](../../../app/services/invoicing/CLAUDE.md)** — detailed product definition, state machine, Core dependency map, build order, scope decisions
 - **[API Reference](api-reference.md)** — HTTP endpoints, request/response shapes, error codes, auth model
-- **[Roadmap & Phase History](../../phase2-invoicing.md)** — short kickoff notes and scope revisions
+- **[Roadmap & Phase History](../../../docs/phase2-invoicing.md)** — short kickoff notes and scope revisions
 
 ## Core Concepts
 
@@ -169,7 +169,7 @@ The following features are **cut from v1** and deferred to Phase 3+:
 - **Line-item-level payment tracking** — payments are invoice-level only
 - **Separate customer entity** — customers are inline on invoices (no dedicated table)
 
-See the [design doc](../../app/services/invoicing/CLAUDE.md) §15 for the full list and rationale.
+See the [design doc](../../../app/services/invoicing/CLAUDE.md) §15 for the full list and rationale.
 
 ## Roadmap
 
@@ -186,9 +186,9 @@ See the [design doc](../../app/services/invoicing/CLAUDE.md) §15 for the full l
 
 ## References
 
-- **Design authority:** [`app/services/invoicing/CLAUDE.md`](../../app/services/invoicing/CLAUDE.md)
+- **Design authority:** [`app/services/invoicing/CLAUDE.md`](../../../app/services/invoicing/CLAUDE.md)
 - **API surface:** [`api-reference.md`](api-reference.md) (this directory)
-- **Postgres schema:** [`app/services/invoicing/models.py`](../../app/services/invoicing/models.py)
-- **Alembic migrations:** [`app/services/invoicing/migrations/`](../../app/services/invoicing/migrations/)
-- **Core Design:** [`A2Z_Core_Design_TestPlan.md`](../../A2Z_Core_Design_TestPlan.md)
+- **Postgres schema:** [`app/services/invoicing/models.py`](../../../app/services/invoicing/models.py)
+- **Alembic migrations:** [`app/services/invoicing/migrations/`](../../../app/services/invoicing/migrations/)
+- **Core Design:** [`A2Z_Core_Design_TestPlan.md`](../../../A2Z_Core_Design_TestPlan.md)
 - **Retention policy:** [`docs/retention.md`](../../retention.md)

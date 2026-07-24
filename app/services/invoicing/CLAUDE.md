@@ -1,12 +1,13 @@
 # A2Z Invoicing — Service Context & Build Plan (Phase 2)
 
-> **⚠ Plan vs. code — this service is not built yet.** As of 2026-07-22
-> `app/services/invoicing/` is an empty package stub (`__init__.py` only). This
-> file is the *build plan*: what the product is (§1–§4), how it wires into Core
-> (§5–§6), and how to build it (§7+). No code contradicts it yet; once code
-> lands, a `docs/services/invoicing/` reference tree (Authority `_reference_`)
-> becomes the current-state source of truth and this file becomes the historical
-> design record — exactly the split used for Omni-Channel
+> **Status (2026-07-23): v1 built.** `app/services/invoicing/` now implements
+> §7–§10 in full — 77 tests (unit + integration + cross-org isolation), 98%
+> package coverage, `ruff` + `mypy --strict` clean, no Core/Omni-Channel
+> regressions (350 tests green repo-wide). This file remains the build plan;
+> the still-open item from §16's Definition of Done is writing the
+> `docs/services/invoicing/` reference tree (Authority `_reference_`) and
+> demoting this file to a historical design record — exactly the split used
+> for Omni-Channel
 > ([`docs/services/omnichannel/`](../../../docs/services/omnichannel/) vs.
 > [`app/services/omnichannel/CLAUDE.md`](../omnichannel/CLAUDE.md)).
 
@@ -394,13 +395,19 @@ Events and AI-parse are **removed** vs. the old outline (§ scope revision).
 
 Listed once, in §15, so there's a single deferral list.
 
-## 14. Open decisions (record before Step 5/6)
+## 14. Open decisions — resolved during the build (2026-07-23)
 
-- **PDF library** — e.g. `weasyprint` (HTML→PDF) vs. a lighter templating lib.
-  Pick before Step 5; note the dep addition.
-- **Email delivery of the PDF** — attach the PDF to the email vs. include a
-  1-hour signed S3 URL. Attachment is simplest for the customer; signed URL keeps
-  the email small and leans on `core.storage`. Decide before Step 6.
+- **PDF library: `reportlab`.** Chosen over `weasyprint` because it's pure
+  Python with no system libraries (cairo/pango) required — keeps the Docker
+  image (`Dockerfile`, `python:3.12-slim`) and CI runners simple; `pip
+  install .` picks it up with zero image changes. `types-reportlab` added
+  alongside it in the `dev` extra for `mypy --strict`.
+- **Email delivery of the PDF: attached, not a signed URL.** `send_invoice`
+  passes the rendered PDF to `core.email.send_email`'s `attachments`
+  parameter (SES `SendRawEmail`) so the customer gets the invoice directly in
+  their inbox. The 1-hour signed URL (`core.storage.generate_signed_url`) is
+  still returned as `pdf_signed_url` on `InvoiceDetail` for in-app viewing —
+  it just isn't the delivery mechanism.
 
 ## 15. Deferred to Phase 3+ (don't build now)
 
@@ -417,14 +424,20 @@ Listed once, in §15, so there's a single deferral list.
 
 ## 16. Definition of Done (v1)
 
-- [ ] `app/services/invoicing/` implemented to §7–§10 signatures.
-- [ ] `invoicing` schema + Alembic baseline; single linear migration head.
-- [ ] All routes in §9 mounted and tested end to end.
-- [ ] `ruff` + `mypy --strict` clean; **>90%** coverage on the package.
-- [ ] Cross-org isolation proven per module (§11); no Core regressions.
+- [x] `app/services/invoicing/` implemented to §7–§10 signatures.
+- [x] `invoicing` schema + Alembic baseline; single linear migration head
+      (`0001_baseline_schema.py`) — verified upgrade/downgrade against a real
+      Postgres 16.
+- [x] All routes in §9 mounted (`app/main.py`) and tested end to end.
+- [x] `ruff` + `mypy --strict` clean; **98%** coverage on the package (77
+      tests: unit incl. every state-machine transition, integration incl.
+      the HTTP layer).
+- [x] Cross-org isolation proven per module (§11); no Core/Omni-Channel
+      regressions (350 tests green repo-wide).
 - [ ] `docs/services/invoicing/` reference tree written (Authority `_reference_`)
       and this file demoted to historical design record, matching the
-      Omni-Channel split.
+      Omni-Channel split. **Still open** — the natural next step once this
+      build is reviewed.
 
 ## 17. Pointers
 

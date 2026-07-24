@@ -368,7 +368,7 @@ Order chosen by dependency depth:
 - [x] `secrets` + `realtime` modules implemented to Core's bar (unit + integration tests, cross-org isolation, docstrings with perf targets) per the Omni-Channel unfreeze protocol (`app/services/omnichannel/CLAUDE.md` §6.2, Build Order Step 1). Full suite re-verified green with no regressions; Core re-frozen.
 
 When all boxes are checked, Core is frozen and Invoicing (Phase 2) can begin.
-**Status: all boxes checked — Core is frozen. Phase 2 Invoicing design (finalized 2026-07-22): `app/services/invoicing/CLAUDE.md`; short roadmap: `docs/phase2-invoicing.md`.**
+**Status: all boxes checked — Core is frozen. Phase 2 Invoicing (design finalized 2026-07-22, v1 built 2026-07-23): `app/services/invoicing/CLAUDE.md`; short roadmap: `docs/phase2-invoicing.md`.**
 
 **Deliberate unfreeze (Phase 3 prerequisite, 2026-07-08):** `secrets.py` and
 `realtime.py` were added per `app/services/omnichannel/CLAUDE.md` §6.2 — the

@@ -16,13 +16,17 @@ Two things exist in this repository today:
 1. **Core** (`app/core/`) — the shared platform layer: auth, tenancy, email,
    storage, audit, settings, events, rate limiting, secrets, and realtime
    fan-out. Frozen (see [Core module reference](../core/README.md)).
-2. **Omni-Channel** (`app/services/omnichannel/`) — the first (and, as of
-   this writing, only) product service built on Core: a multi-tenant unified
-   inbox for WhatsApp/email/SMS conversations. See
+2. **Omni-Channel** (`app/services/omnichannel/`) — the first product service
+   built on Core: a multi-tenant unified inbox for WhatsApp/email/SMS
+   conversations. See
    [Omni-Channel service docs](../services/omnichannel/README.md).
-
-Invoicing (`app/services/invoicing/`) is a placeholder package — see
-[`docs/phase2-invoicing.md`](../phase2-invoicing.md) for its kickoff plan.
+3. **Invoicing** (`app/services/invoicing/`) — the second product service
+   built on Core: invoice CRUD, a linear lifecycle (draft → sent →
+   partially_paid/paid → void), PDF generation, and email delivery, mounted
+   at `/v1/invoicing`. Needed no Core change. See
+   [`app/services/invoicing/CLAUDE.md`](../../app/services/invoicing/CLAUDE.md)
+   (design and current state) and
+   [`docs/phase2-invoicing.md`](../phase2-invoicing.md) (roadmap).
 
 ## Golden rules (drive every design decision below)
 
@@ -152,7 +156,7 @@ app/
 ├── core/            # platform layer — see docs/core/README.md
 ├── services/
 │   ├── omnichannel/ # see docs/services/omnichannel/README.md
-│   └── invoicing/   # placeholder — see docs/phase2-invoicing.md
+│   └── invoicing/   # v1 built — see app/services/invoicing/CLAUDE.md
 ├── routers/         # thin HTTP layer
 └── lambdas/         # Cognito + SES/SNS out-of-band handlers
 infra/               # Terragrunt/Terraform — see infra/README.md

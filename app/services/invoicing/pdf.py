@@ -165,17 +165,23 @@ def _render_invoice_html(invoice: InvoiceRead) -> str:
     <body>
         <div class="header">
             <div class="invoice-number">Invoice {invoice.invoice_number}</div>
-            <div class="invoice-date">Date: {invoice.invoice_date.strftime('%B %d, %Y')}</div>
-            <div class="invoice-date">Due: {invoice.due_date.strftime('%B %d, %Y')}</div>
+            <div class="invoice-date">Date: {invoice.invoice_date.strftime("%B %d, %Y")}</div>
+            <div class="invoice-date">Due: {invoice.due_date.strftime("%B %d, %Y")}</div>
         </div>
 
         <div class="customer-info">
             <div class="customer-name">{invoice.customer_name}</div>
-            {f'<div class="customer-detail">{invoice.customer_company}</div>'
-            if invoice.customer_company else ''}
+            {
+        f'<div class="customer-detail">{invoice.customer_company}</div>'
+        if invoice.customer_company
+        else ""
+    }
             <div class="customer-detail">{invoice.customer_email}</div>
-            {f'<div class="customer-detail">Terms: {invoice.payment_terms}</div>'
-            if invoice.payment_terms else ''}
+            {
+        f'<div class="customer-detail">Terms: {invoice.payment_terms}</div>'
+        if invoice.payment_terms
+        else ""
+    }
         </div>
 
         <table>
@@ -198,42 +204,40 @@ def _render_invoice_html(invoice: InvoiceRead) -> str:
                 <span class="amount">${subtotal:.2f}</span>
             </div>
             {
-                f'<div class="totals-row"><span>Tax:</span>'
-                f'<span class="amount">${tax:.2f}</span></div>'
-                if tax > 0
-                else ''
-            }
+        f'<div class="totals-row"><span>Tax:</span><span class="amount">${tax:.2f}</span></div>'
+        if tax > 0
+        else ""
+    }
             {
-                f'<div class="totals-row"><span>Discount:</span>'
-                f'<span class="amount">-${discount:.2f}</span></div>'
-                if discount > 0
-                else ''
-            }
+        f'<div class="totals-row"><span>Discount:</span>'
+        f'<span class="amount">-${discount:.2f}</span></div>'
+        if discount > 0
+        else ""
+    }
             <div class="totals-row total">
                 <span>Total Due:</span>
                 <span class="amount">${total:.2f}</span>
             </div>
             {
-                f'<div class="totals-row"><span>Paid:</span>'
-                f'<span class="amount">${paid:.2f}</span></div>'
-                if paid > 0
-                else ''
-            }
+        f'<div class="totals-row"><span>Paid:</span><span class="amount">${paid:.2f}</span></div>'
+        if paid > 0
+        else ""
+    }
             {
-                f'<div class="totals-row"><span>Balance:</span>'
-                f'<span class="amount">${balance:.2f}</span></div>'
-                if balance > 0
-                else ''
-            }
+        f'<div class="totals-row"><span>Balance:</span>'
+        f'<span class="amount">${balance:.2f}</span></div>'
+        if balance > 0
+        else ""
+    }
         </div>
 
         {
-            f'<div style="margin-top: 40px; font-size: 12px; '
-            f'color: #7f8c8d;"><strong>Notes:</strong><br/>'
-            f'{invoice.notes}</div>'
-            if invoice.notes
-            else ''
-        }
+        f'<div style="margin-top: 40px; font-size: 12px; '
+        f'color: #7f8c8d;"><strong>Notes:</strong><br/>'
+        f"{invoice.notes}</div>"
+        if invoice.notes
+        else ""
+    }
     </body>
     </html>
     """

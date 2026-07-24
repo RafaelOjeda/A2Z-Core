@@ -99,9 +99,9 @@ class TestCalculations:
     def test_multiple_line_items(self):
         """Calculate totals with multiple line items."""
         line_items = [
-            (Decimal("1"), 5000),   # 5000
-            (Decimal("2"), 3000),   # 6000
-            (Decimal("10"), 200),   # 2000
+            (Decimal("1"), 5000),  # 5000
+            (Decimal("2"), 3000),  # 6000
+            (Decimal("10"), 200),  # 2000
         ]
         tax_cents = 1300  # 13%
         discount_cents = 0

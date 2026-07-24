@@ -103,7 +103,7 @@ async def list_invoices_endpoint(
     status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    request = None,
+    request=None,
 ) -> list[InvoiceRead]:
     """List invoices for an org, optionally filtered by status. Any member can read."""
     await check_access(org_id, request)
@@ -148,7 +148,7 @@ async def void_invoice_endpoint(
     org_id: str,
     invoice_id: str,
     reason: str = Query(..., min_length=1),
-    request = None,
+    request=None,
 ) -> InvoiceRead:
     """Void an invoice. Requires OWNER or ADMIN."""
     user_id, _ = await check_access(org_id, request, required_role="ADMIN")
@@ -163,7 +163,7 @@ async def send_invoice_endpoint(
     org_id: str,
     invoice_id: str,
     recipient_email: str | None = Query(None),
-    request = None,
+    request=None,
 ) -> InvoiceRead:
     """Send an invoice via email (generate PDF + email). Requires OWNER or ADMIN.
 

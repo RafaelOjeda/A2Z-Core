@@ -249,9 +249,7 @@ async def update_invoice(
     if data.tax_cents is not None or data.discount_cents is not None or data.line_items is not None:
         tax_cents = data.tax_cents if data.tax_cents is not None else invoice.tax_cents
         discount_cents = (
-            data.discount_cents
-            if data.discount_cents is not None
-            else invoice.discount_cents
+            data.discount_cents if data.discount_cents is not None else invoice.discount_cents
         )
 
         # If line items are provided, recalculate with them; else use existing
@@ -454,6 +452,7 @@ async def void_invoice(
         inv.status = InvoiceStatus.VOID
         inv.void_reason = reason
         from datetime import datetime
+
         inv.voided_at = datetime.utcnow()
         await session.commit()
 
@@ -550,8 +549,8 @@ Dear {invoice.customer_name},
 
 Please find attached your invoice {invoice.invoice_number}.
 
-Invoice Date: {invoice.invoice_date.strftime('%B %d, %Y')}
-Due Date: {invoice.due_date.strftime('%B %d, %Y')}
+Invoice Date: {invoice.invoice_date.strftime("%B %d, %Y")}
+Due Date: {invoice.due_date.strftime("%B %d, %Y")}
 Total: ${invoice.total_cents / 100:.2f}
 
 Thank you for your business.

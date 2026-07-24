@@ -63,11 +63,13 @@ async def _seed_secret(org_id: str, key: str) -> None:
     await clients.run_aws(
         clients.secretsmanager().create_secret,
         Name=f"a2z/{org_id}/omnichannel/{key}",
-        SecretString=json.dumps({
-            "app_secret": _APP_SECRET,
-            "access_token": "tok",
-            "phone_number_id": "123",
-        }),
+        SecretString=json.dumps(
+            {
+                "app_secret": _APP_SECRET,
+                "access_token": "tok",
+                "phone_number_id": "123",
+            }
+        ),
     )
 
 
@@ -87,27 +89,29 @@ async def _seed_connection(session: AsyncSession, org_id: str = "org-load") -> C
 
 
 def _payload(wamid: str, from_number: str = "15551234567") -> bytes:
-    return json.dumps({
-        "entry": [
-            {
-                "changes": [
-                    {
-                        "value": {
-                            "contacts": [{"wa_id": from_number, "profile": {"name": "Jane"}}],
-                            "messages": [
-                                {
-                                    "from": from_number,
-                                    "id": wamid,
-                                    "type": "text",
-                                    "text": {"body": "hello"},
-                                }
-                            ],
+    return json.dumps(
+        {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "contacts": [{"wa_id": from_number, "profile": {"name": "Jane"}}],
+                                "messages": [
+                                    {
+                                        "from": from_number,
+                                        "id": wamid,
+                                        "type": "text",
+                                        "text": {"body": "hello"},
+                                    }
+                                ],
+                            }
                         }
-                    }
-                ]
-            }
-        ]
-    }).encode("utf-8")
+                    ]
+                }
+            ]
+        }
+    ).encode("utf-8")
 
 
 async def test_webhook_ack_latency(aws: None, session: AsyncSession) -> None:

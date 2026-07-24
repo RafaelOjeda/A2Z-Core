@@ -173,13 +173,15 @@ async def create_org(org_name: str, owner_id: str) -> Org:
     org_id = f"{_slug(org_name)}-{uuid.uuid4().hex[:8]}"
     org = Org(org_id=org_id, name=org_name, owner_id=owner_id, created_at=now)
 
-    org_item = to_item({
-        "PK": _org_pk(org_id),
-        "SK": "METADATA",
-        "name": org_name,
-        "owner_id": owner_id,
-        "created_at": now.isoformat(),
-    })
+    org_item = to_item(
+        {
+            "PK": _org_pk(org_id),
+            "SK": "METADATA",
+            "name": org_name,
+            "owner_id": owner_id,
+            "created_at": now.isoformat(),
+        }
+    )
     member_item = to_item(_membership_item(org_id, owner_id, Role.OWNER, now))
     try:
         await clients.run_aws(
@@ -306,12 +308,14 @@ async def create_user_if_not_exists(user_id: str, email: str) -> None:
         await clients.run_aws(
             clients.dynamodb().put_item,
             TableName=_table(),
-            Item=to_item({
-                "PK": _user_pk(user_id),
-                "SK": "METADATA",
-                "email": email,
-                "created_at": now.isoformat(),
-            }),
+            Item=to_item(
+                {
+                    "PK": _user_pk(user_id),
+                    "SK": "METADATA",
+                    "email": email,
+                    "created_at": now.isoformat(),
+                }
+            ),
             ConditionExpression="attribute_not_exists(PK)",
         )
         log.info("user.created", extra={"user_id": user_id})

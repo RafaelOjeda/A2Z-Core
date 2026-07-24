@@ -28,31 +28,33 @@ _REDACT_KEYS = frozenset({"token", "jwt", "authorization", "password", "secret"}
 
 # LogRecord attributes that ``extra=`` must not overwrite (logging raises if it
 # does). We defensively rename any colliding key to ``<key>_`` instead.
-_RESERVED_LOG_KEYS = frozenset({
-    "name",
-    "msg",
-    "args",
-    "levelname",
-    "levelno",
-    "pathname",
-    "filename",
-    "module",
-    "exc_info",
-    "exc_text",
-    "stack_info",
-    "lineno",
-    "funcName",
-    "created",
-    "msecs",
-    "relativeCreated",
-    "thread",
-    "threadName",
-    "processName",
-    "process",
-    "message",
-    "asctime",
-    "taskName",
-})
+_RESERVED_LOG_KEYS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "message",
+        "asctime",
+        "taskName",
+    }
+)
 
 
 class _JsonFormatter(logging.Formatter):

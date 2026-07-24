@@ -53,14 +53,16 @@ def test_ses_bounce_notification_suppresses(aws: None) -> None:
         "Records": [
             {
                 "Sns": {
-                    "Message": json.dumps({
-                        "notificationType": "Bounce",
-                        "mail": {"messageId": result.message_id},
-                        "bounce": {
-                            "bounceType": "Permanent",
-                            "bouncedRecipients": [{"emailAddress": "c@example.com"}],
-                        },
-                    })
+                    "Message": json.dumps(
+                        {
+                            "notificationType": "Bounce",
+                            "mail": {"messageId": result.message_id},
+                            "bounce": {
+                                "bounceType": "Permanent",
+                                "bouncedRecipients": [{"emailAddress": "c@example.com"}],
+                            },
+                        }
+                    )
                 }
             }
         ]
@@ -81,11 +83,15 @@ def test_ses_complaint_notification_suppresses(aws: None) -> None:
         "Records": [
             {
                 "Sns": {
-                    "Message": json.dumps({
-                        "notificationType": "Complaint",
-                        "mail": {"messageId": result.message_id},
-                        "complaint": {"complainedRecipients": [{"emailAddress": "s@example.com"}]},
-                    })
+                    "Message": json.dumps(
+                        {
+                            "notificationType": "Complaint",
+                            "mail": {"messageId": result.message_id},
+                            "complaint": {
+                                "complainedRecipients": [{"emailAddress": "s@example.com"}]
+                            },
+                        }
+                    )
                 }
             }
         ]

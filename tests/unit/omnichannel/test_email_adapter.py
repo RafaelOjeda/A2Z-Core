@@ -112,9 +112,10 @@ async def test_normalize_inbound_multipart_with_attachment() -> None:
     part.add_header("Content-Disposition", "attachment", filename="receipt.pdf")
     mime.attach(part)
 
-    messages = await adapter.normalize_inbound(
-        {"raw_mime": mime.as_bytes(), "external_message_id": "ses-in-2"}
-    )
+    messages = await adapter.normalize_inbound({
+        "raw_mime": mime.as_bytes(),
+        "external_message_id": "ses-in-2",
+    })
 
     msg = messages[0]
     assert msg.body_text == "plain body"

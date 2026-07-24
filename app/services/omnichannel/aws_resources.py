@@ -57,7 +57,8 @@ def create_queues() -> None:
     """Create every Omni-Channel inbound/outbound/events queue + its DLQ."""
     for name in settings().omnichannel_queue_names.values():
         dlq_arn = _create_queue(_dlq_name(name))
-        redrive_policy = json.dumps(
-            {"deadLetterTargetArn": dlq_arn, "maxReceiveCount": _MAX_RECEIVE_COUNT}
-        )
+        redrive_policy = json.dumps({
+            "deadLetterTargetArn": dlq_arn,
+            "maxReceiveCount": _MAX_RECEIVE_COUNT,
+        })
         _create_queue(name, attributes={"RedrivePolicy": redrive_policy})

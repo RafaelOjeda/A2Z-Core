@@ -104,12 +104,10 @@ def _create_queue(name: str, *, redrive_target_arn: str | None = None) -> str:
     sqs = clients.sqs()
     attributes: dict[QueueAttributeNameType, str] = {}
     if redrive_target_arn:
-        attributes["RedrivePolicy"] = json.dumps(
-            {
-                "deadLetterTargetArn": redrive_target_arn,
-                "maxReceiveCount": SQS_MAX_RECEIVE_COUNT,
-            }
-        )
+        attributes["RedrivePolicy"] = json.dumps({
+            "deadLetterTargetArn": redrive_target_arn,
+            "maxReceiveCount": SQS_MAX_RECEIVE_COUNT,
+        })
     try:
         resp = sqs.create_queue(QueueName=name, Attributes=attributes)
         log.info("sqs.queue.created", extra={"queue": name})

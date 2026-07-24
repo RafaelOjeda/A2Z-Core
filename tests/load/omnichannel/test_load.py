@@ -64,7 +64,11 @@ async def _seed_secret(org_id: str, key: str) -> None:
         clients.secretsmanager().create_secret,
         Name=f"a2z/{org_id}/omnichannel/{key}",
         SecretString=json.dumps(
-            {"app_secret": _APP_SECRET, "access_token": "tok", "phone_number_id": "123"}
+            {
+                "app_secret": _APP_SECRET,
+                "access_token": "tok",
+                "phone_number_id": "123",
+            }
         ),
     )
 

@@ -25,11 +25,12 @@ from fastapi.responses import JSONResponse
 
 from app.core.exceptions import CoreError, RateLimitError
 from app.core.logging import get_logger, request_id_var
-from app.routers import core_admin, health, invoicing, omnichannel
+from app.routers import core_admin, health, invoicing, landing, omnichannel
 
 log = get_logger("app.main")
 
 app = FastAPI(title="A2Z Core", version="0.1.0")
+app.include_router(landing.router)
 app.include_router(health.router)
 app.include_router(core_admin.router, prefix="/v1")
 app.include_router(omnichannel.router, prefix="/v1")

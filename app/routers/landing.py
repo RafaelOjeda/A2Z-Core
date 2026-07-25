@@ -219,67 +219,139 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 ),
                 React.createElement('div', { className: 'container' },
                     React.createElement('section', { className: 'hero' },
-                        React.createElement('h1', null, 'A2Z — messaging and invoicing, unified'),
+                        React.createElement(
+                            'h1', null,
+                            'A2Z — messaging and invoicing, unified'
+                        ),
                         React.createElement('p', { className: 'subtitle' },
-                            'A unified platform for small businesses. One backbone for invoicing, omni-channel messaging, and more. All your essential tools in one place.'
+                            ('A unified platform for small businesses. One backbone '
+                             'for invoicing, omni-channel messaging, and more. All '
+                             'your essential tools in one place.')
                         ),
                         React.createElement('div', { className: 'cta-buttons' },
-                            React.createElement('button', { className: 'btn btn-primary' }, 'Get Started'),
-                            React.createElement('button', { className: 'btn btn-secondary' }, 'View Docs')
+                            React.createElement(
+                                'button',
+                                { className: 'btn btn-primary' },
+                                'Get Started'
+                            ),
+                            React.createElement(
+                                'button',
+                                { className: 'btn btn-secondary' },
+                                'View Docs'
+                            )
                         )
                     ),
                     React.createElement('section', { className: 'stats', id: 'stats' },
                         React.createElement('div', { className: 'stat' },
-                            React.createElement('div', { className: 'stat-number' }, '3M+'),
-                            React.createElement('div', { className: 'stat-label' }, 'Emails sent monthly')
+                            React.createElement(
+                                'div', { className: 'stat-number' }, '3M+'
+                            ),
+                            React.createElement(
+                                'div',
+                                { className: 'stat-label' },
+                                'Emails sent monthly'
+                            )
                         ),
                         React.createElement('div', { className: 'stat' },
-                            React.createElement('div', { className: 'stat-number' }, '99.9%'),
-                            React.createElement('div', { className: 'stat-label' }, 'Uptime SLA')
+                            React.createElement(
+                                'div', { className: 'stat-number' }, '99.9%'
+                            ),
+                            React.createElement(
+                                'div', { className: 'stat-label' }, 'Uptime SLA'
+                            )
                         ),
                         React.createElement('div', { className: 'stat' },
-                            React.createElement('div', { className: 'stat-number' }, '7 years'),
-                            React.createElement('div', { className: 'stat-label' }, 'Audit log retention')
+                            React.createElement(
+                                'div', { className: 'stat-number' }, '7 years'
+                            ),
+                            React.createElement(
+                                'div',
+                                { className: 'stat-label' },
+                                'Audit log retention'
+                            )
                         ),
                         React.createElement('div', { className: 'stat' },
-                            React.createElement('div', { className: 'stat-number' }, '< 50ms'),
-                            React.createElement('div', { className: 'stat-label' }, 'API response time')
+                            React.createElement(
+                                'div', { className: 'stat-number' }, '< 50ms'
+                            ),
+                            React.createElement(
+                                'div',
+                                { className: 'stat-label' },
+                                'API response time'
+                            )
                         )
                     ),
                     React.createElement('section', { className: 'features', id: 'features' },
                         React.createElement('div', { className: 'feature' },
-                            React.createElement('div', { className: 'feature-icon' }, '📧'),
+                            React.createElement(
+                                'div', { className: 'feature-icon' }, '📧'
+                            ),
                             React.createElement('h3', null, 'Smart Email'),
-                            React.createElement('p', null, 'Send emails, track delivery, manage suppressions, and handle bounces automatically.')
+                            React.createElement('p', null,
+                                ('Send emails, track delivery, manage '
+                                 'suppressions, and handle bounces automatically.')
+                            )
                         ),
                         React.createElement('div', { className: 'feature' },
-                            React.createElement('div', { className: 'feature-icon' }, '💳'),
+                            React.createElement(
+                                'div', { className: 'feature-icon' }, '💳'
+                            ),
                             React.createElement('h3', null, 'Invoicing'),
-                            React.createElement('p', null, 'Create, send, and track invoices with automatic payment reminders and integrations.')
+                            React.createElement('p', null,
+                                ('Create, send, and track invoices with '
+                                 'automatic payment reminders and integrations.')
+                            )
                         ),
                         React.createElement('div', { className: 'feature' },
-                            React.createElement('div', { className: 'feature-icon' }, '💬'),
+                            React.createElement(
+                                'div', { className: 'feature-icon' }, '💬'
+                            ),
                             React.createElement('h3', null, 'Omni-Channel'),
-                            React.createElement('p', null, 'Reach customers via email, SMS, WhatsApp, and other channels from one dashboard.')
+                            React.createElement('p', null,
+                                ('Reach customers via email, SMS, WhatsApp, '
+                                 'and other channels from one dashboard.')
+                            )
                         ),
                         React.createElement('div', { className: 'feature' },
-                            React.createElement('div', { className: 'feature-icon' }, '🔐'),
+                            React.createElement(
+                                'div', { className: 'feature-icon' }, '🔐'
+                            ),
                             React.createElement('h3', null, 'Secure & Compliant'),
-                            React.createElement('p', null, 'Enterprise-grade security, SOC 2 compliance, and 7-year audit logs.')
+                            React.createElement('p', null,
+                                ('Enterprise-grade security, SOC 2 compliance, '
+                                 'and 7-year audit logs.')
+                            )
                         ),
                         React.createElement('div', { className: 'feature' },
-                            React.createElement('div', { className: 'feature-icon' }, '⚡'),
+                            React.createElement(
+                                'div', { className: 'feature-icon' }, '⚡'
+                            ),
                             React.createElement('h3', null, 'Lightning Fast'),
-                            React.createElement('p', null, 'Sub-50ms API response times and optimized for scale with Redis caching.')
+                            React.createElement('p', null,
+                                ('Sub-50ms API response times and optimized '
+                                 'for scale with Redis caching.')
+                            )
                         ),
                         React.createElement('div', { className: 'feature' },
-                            React.createElement('div', { className: 'feature-icon' }, '📊'),
+                            React.createElement(
+                                'div', { className: 'feature-icon' }, '📊'
+                            ),
                             React.createElement('h3', null, 'Analytics & Events'),
-                            React.createElement('p', null, 'Real-time event streaming and detailed analytics for every action.')
+                            React.createElement('p', null,
+                                ('Real-time event streaming and detailed '
+                                 'analytics for every action.')
+                            )
                         )
                     ),
-                    React.createElement('section', { className: 'integration-section', id: 'integrations' },
-                        React.createElement('h2', { className: 'section-title' }, 'Built on Modern Infrastructure'),
+                    React.createElement(
+                        'section',
+                        {
+                            className: 'integration-section',
+                            id: 'integrations'
+                        },
+                        React.createElement('h2', { className: 'section-title' },
+                            'Built on Modern Infrastructure'
+                        ),
                         React.createElement('div', { className: 'integration-grid' },
                             React.createElement('div', { className: 'integration-card' },
                                 React.createElement('div', { style: { fontSize: '24px' } }, '🐍'),
@@ -317,7 +389,10 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                     )
                 ),
                 React.createElement('footer', { className: 'container' },
-                    React.createElement('p', null, '© 2026 A2Z. All rights reserved. | AWS for small businesses.')
+                    React.createElement('p', null,
+                        '© 2026 A2Z. All rights reserved. | AWS for '
+                        'small businesses.'
+                    )
                 )
             );
         }

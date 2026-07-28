@@ -4,7 +4,7 @@ Shared Postgres instance — a container on the single-EC2 MVP box, RDS at
 distribution (root CLAUDE.md §2; app/services/omnichannel/CLAUDE.md §12) —
 in the dedicated ``omnichannel`` schema (models.py). Other services get their
 own schema on the same instance; there is never a second Postgres instance
-(cost principle, same as Core's DynamoDB/Redis singletons).
+(cost principle, same as Core's AWS client singletons in ``core.clients``).
 """
 
 from __future__ import annotations

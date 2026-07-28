@@ -369,8 +369,8 @@ async def _attachments_for(
     """Load every message's attachments in one query, then sign each URL.
 
     One ``IN`` query rather than a per-message lookup -- a 50-message thread
-    would otherwise be 50 round-trips. Signing itself is local (and Redis-cached
-    by ``media``), so it stays off the database's critical path.
+    would otherwise be 50 round-trips. Signing itself is local (and cached
+    in-process by ``media``), so it stays off the database's critical path.
     """
     if not message_ids:
         return {}

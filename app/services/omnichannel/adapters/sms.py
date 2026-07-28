@@ -7,10 +7,11 @@ non-AWS credential to manage.
 Inbound messages and delivery-status feedback for SNS SMS arrive over an
 SNS topic subscription (two-way SMS + delivery-status logging), not a
 public HTTP endpoint — structurally the same shape as Core's own SES/SNS
-bounce pipeline (``app/lambdas/ses_notifications.py``), not a forgeable
-internet webhook like WhatsApp's. The actual SNS-subscribed Lambda is
-Step 5 (the end-to-end message flow); this adapter is the channel-specific
-translation layer it will call into.
+bounce pipeline (``app/routers/ses_notifications.py``, an HTTPS-subscribed
+route on the single-box MVP — see docs/architecture/single-box-mvp.md),
+not a forgeable internet webhook like WhatsApp's. The actual SNS
+subscription wiring is Step 5 (the end-to-end message flow); this adapter
+is the channel-specific translation layer it will call into.
 
 NOTE: the JSON field names below follow AWS's documented two-way-SMS and
 delivery-status-logging payload shapes as of this writing. This is the part

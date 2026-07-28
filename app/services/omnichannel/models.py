@@ -218,10 +218,15 @@ class ConversationAssignment(Base):
 
 
 class Presence(Base):
-    """Backup/audit row per agent — live state is Redis, not this table (§5.3).
+    """Per-agent presence row (§5.3).
 
-    Unused in v1 (auto-routing/presence deferred, §15); table ships now so
-    it costs nothing to have ready.
+    Unused in v1 (auto-routing/presence deferred, §15) -- the Redis-backed
+    ``presence.py`` module that used to read/write this table was removed
+    when the platform collapsed to single-box MVP (no Redis at all, see
+    docs/architecture/single-box-mvp.md). Table ships now so it costs
+    nothing to have ready; a future implementation reads/writes it directly
+    (this row *is* the live state, not a backup of one) with a freshness
+    window on ``updated_at`` standing in for the old TTL.
     """
 
     __tablename__ = "presence"

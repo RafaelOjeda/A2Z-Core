@@ -2,11 +2,13 @@
 
 Validation is intentionally **synchronous**: the design calls it inline in request
 handlers without ``await``, and once signing keys are cached the work is pure CPU
-(signature + claim checks). We cache the Cognito JWKS **in-process** with a 24h TTL
-rather than in Redis — Cognito rotates keys rarely, an in-memory cache keeps the
-hot path free of network I/O, and it avoids a second (sync) Redis client. A
-Redis-backed cross-instance cache is a deferred optimization (CLAUDE.md §16: when
-ambiguous, document the decision).
+(signature + claim checks). We cache the Cognito JWKS **in-process** with a 24h
+TTL — Cognito rotates keys rarely, and an in-memory cache keeps the hot path
+free of network I/O. (This predates the single-box collapse that later moved
+everything else in-process too — see docs/architecture/single-box-mvp.md —
+but the reasoning here was independent of that: it was the right call even
+when a shared cross-process cache was on the table, since JWKS reads are the
+one hot path where a network hop to fetch them would matter.)
 
 Two token shapes are accepted:
   * **Cognito RS256** — verified against the pool's JWKS, issuer-checked. The only

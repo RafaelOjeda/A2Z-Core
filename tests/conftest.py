@@ -1,14 +1,19 @@
 """Shared test fixtures.
 
-We run "integration" tests against **moto** (in-process AWS mocks) and **fakeredis**
-so the whole suite runs anywhere — no Docker/LocalStack required in CI. The same
-tests work against real LocalStack by exporting ``AWS_ENDPOINT_URL`` and a live
-``REDIS_URL`` and skipping the moto fixture.
+We run "integration" tests against **moto** (in-process AWS mocks) so most of
+the suite runs anywhere — no Docker/LocalStack required in CI. The same
+tests work against real LocalStack by exporting ``AWS_ENDPOINT_URL`` and
+skipping the moto fixture. Omni-Channel/Invoicing's Postgres-backed tests are
+the one exception requiring a real Postgres (see their own conftest.py).
 
 Fixtures:
-  * ``aws``          — moto-mocked AWS with all Core resources provisioned.
-  * ``fake_redis``   — autouse; swaps the Redis singleton for fakeredis.
-  * ``make_token``   — factory producing valid test JWTs (HS256, test secret).
+  * ``aws``               — moto-mocked AWS with all Core resources provisioned.
+  * ``_reset_core_state`` — autouse; clears in-process module-global state
+    (realtime subscribers, rate-limit windows, TTL caches) between tests so
+    they don't contaminate each other via shared keys -- the equivalent of
+    each test getting a fresh backend, now that these live in-process instead
+    of in a per-test-isolated Redis.
+  * ``make_token``        — factory producing valid test JWTs (HS256, test secret).
 """
 
 from __future__ import annotations
@@ -50,15 +55,16 @@ def aws() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def fake_redis(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Replace the Redis singleton with an isolated fakeredis per test."""
-    import fakeredis.aioredis as fakeaioredis
+def _reset_core_state() -> None:
+    """Clear in-process module-global state that would otherwise leak between
+    tests -- these modules hold no per-test isolation of their own, so
+    without this a value set in one test (a rate-limit window, a cached
+    secret, a realtime subscriber) would still be there in the next."""
+    from app.core import cache, rate_limit, realtime
 
-    from app.core import clients
-
-    server_client = fakeaioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr(clients, "redis_client", lambda: server_client)
-    yield
+    realtime.reset()
+    rate_limit.reset()
+    cache.clear_all()
 
 
 @pytest.fixture

@@ -1,13 +1,12 @@
 """Integration tests for the cached signed-URL helper (§10, Build Order Step 8).
 
-Real moto S3 signing + real fakeredis caching -- no mocking of either side.
+Real moto S3 signing + the real in-process cache -- no mocking of either side.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from app.core import clients
 from app.core.exceptions import StorageError
 from app.services.omnichannel import media
 
@@ -34,7 +33,8 @@ async def test_cache_ttl_is_shorter_than_signed_expiry(aws: None) -> None:
     assert media._CACHE_TTL_SECONDS < media._SIGN_EXPIRY_SECONDS
 
     await media.signed_url_for_attachment("org-a", "org-a/omnichannel/photo.jpg")
-    ttl = await clients.redis_client().ttl("mediaurl:org-a/omnichannel/photo.jpg")
+    ttl = media._cache.ttl("mediaurl:org-a/omnichannel/photo.jpg")
+    assert ttl is not None
     assert 0 < ttl <= media._CACHE_TTL_SECONDS
 
 
@@ -50,7 +50,7 @@ async def test_cross_org_rejection_happens_before_caching(aws: None) -> None:
     with pytest.raises(StorageError):
         await media.signed_url_for_attachment("org-a", "org-b/omnichannel/secret.jpg")
 
-    assert await clients.redis_client().get("mediaurl:org-b/omnichannel/secret.jpg") is None
+    assert media._cache.get("mediaurl:org-b/omnichannel/secret.jpg") is None
 
 
 async def test_orgs_get_independent_cache_entries(aws: None) -> None:

@@ -1,8 +1,8 @@
-"""End-to-end API tests via FastAPI TestClient (moto + fakeredis).
+"""End-to-end API tests via FastAPI TestClient (moto + a real Postgres).
 
 Exercises the DoD scenario (CLAUDE.md §15): boot the app, /health checks
-DynamoDB + Redis, and the admin router creates an org, adds a member, changes
-settings, and sends a test email end-to-end.
+DynamoDB + Postgres, and the admin router creates an org, adds a member,
+changes settings, and sends a test email end-to-end.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def test_health_ok(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["dynamodb"] == "ok"
-    assert body["redis"] == "ok"
+    assert body["postgres"] == "ok"
 
 
 def test_missing_token_is_401(client: TestClient) -> None:

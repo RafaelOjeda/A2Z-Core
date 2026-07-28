@@ -1,4 +1,4 @@
-"""Integration tests for core.secrets (moto Secrets Manager + fakeredis)."""
+"""Integration tests for core.secrets (moto Secrets Manager + the in-process cache)."""
 
 from __future__ import annotations
 

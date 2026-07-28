@@ -1,7 +1,7 @@
 """HTTP-level tests for the Invoicing router (§9).
 
-Runs the real app via ``TestClient`` -- moto AWS + fakeredis (``aws``
-fixture) for Core (membership/settings/storage/email), real Postgres for
+Runs the real app via ``TestClient`` -- moto AWS (``aws`` fixture) for
+Core (membership/settings/storage/email), real Postgres for
 the invoicing schema. Mirrors
 ``tests/integration/omnichannel/test_router_http.py``'s pattern exactly,
 including the engine-reset dance around ``TestClient``'s own event loop --

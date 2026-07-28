@@ -1,31 +1,37 @@
-"""Rate limiting — Redis sliding-window limiter (CLAUDE.md §7).
+"""Rate limiting — in-process sliding-window limiter (CLAUDE.md §7).
 
-A sorted set per ``{org_id, action}`` holds one member per recent request, scored
-by timestamp (ms). On each call we, in a single pipeline: drop entries older than
-the window, add the current request, count, and refresh the key's TTL. If the
-count exceeds the limit we remove our own entry and raise
-:class:`RateLimitError` with ``retry_after``.
+A deque per ``{org_id, action}`` holds one timestamp (monotonic seconds) per
+recent request. On each call we evict entries older than the window, then
+check whether the deque is already at the limit before recording the new
+request. Default limits live in ``config.RATE_LIMITS`` so services don't
+invent their own (CLAUDE.md §7). Key: ``(org_id, action)``.
+Performance: < 10ms (in practice, microseconds — no I/O).
 
-This "add then check" keeps the window read+write atomic enough to avoid races
-without a Lua script (so it runs on fakeredis in tests). Default limits live in
-``config.RATE_LIMITS`` so services don't invent their own (CLAUDE.md §7).
-Key: ``ratelimit:{org_id}:{action}``. Performance: < 10ms.
+Single-process only (docs/architecture/single-box-mvp.md): this state is a
+plain module-global dict, not shared across processes. Running more than one
+worker process would give each its own budget per action — silently
+doubling every limit, including provider pair-rate ceilings like
+``omnichannel.whatsapp.send``. Do not add a second process without revisiting
+this module.
+
+DOCUMENTED DEVIATION from the prior Redis-backed implementation: that version
+used an "add optimistically, then roll back on overflow" dance to keep the
+window read+write atomic across a network hop (a Redis pipeline). On a
+single event loop with no ``await`` in the critical section there is no race
+to protect against, so this version simply checks the limit before
+recording -- there is nothing to roll back.
 """
 
 from __future__ import annotations
 
 import math
 import time
-import uuid
-from typing import Any
+from collections import deque
 
 from app.config import RATE_LIMITS
-from app.core import clients
 from app.core.exceptions import RateLimitError
 
-
-def _key(org_id: str, action: str) -> str:
-    return f"ratelimit:{org_id}:{action}"
+_windows: dict[tuple[str, str], deque[float]] = {}
 
 
 def limits_for(action: str) -> tuple[int, int]:
@@ -51,36 +57,24 @@ async def check_and_increment(
 
     Performance: < 10ms.
     """
-    redis = clients.redis_client()
-    key = _key(org_id, action)
-    now = time.time()
-    now_ms = int(now * 1000)
-    window_start_ms = now_ms - window_seconds * 1000
-    member = f"{now_ms}:{uuid.uuid4().hex}"
+    now = time.monotonic()
+    window_start = now - window_seconds
+    key = (org_id, action)
+    dq = _windows.setdefault(key, deque())
 
-    async with redis.pipeline(transaction=True) as pipe:
-        pipe.zremrangebyscore(key, 0, window_start_ms)
-        pipe.zadd(key, {member: now_ms})
-        pipe.zcard(key)
-        pipe.expire(key, window_seconds)
-        results = await pipe.execute()
+    while dq and dq[0] <= window_start:
+        dq.popleft()
 
-    count = int(results[2])
-    if count > limit:
-        # We optimistically added ourselves; roll back and reject.
-        await redis.zrem(key, member)
-        retry_after = await _retry_after(redis, key, now, window_seconds)
+    if len(dq) >= limit:
+        retry_after = max(1, math.ceil(dq[0] + window_seconds - now))
         raise RateLimitError(
             f"Rate limit exceeded for {action} (limit {limit}/{window_seconds}s)",
             retry_after=retry_after,
         )
 
+    dq.append(now)
 
-async def _retry_after(redis: Any, key: str, now: float, window_seconds: int) -> int:
-    """Seconds until the oldest in-window request ages out (>= 1)."""
-    oldest = await redis.zrange(key, 0, 0, withscores=True)
-    if not oldest:
-        return window_seconds
-    oldest_ms = float(oldest[0][1])
-    seconds_left = (oldest_ms / 1000 + window_seconds) - now
-    return max(1, math.ceil(seconds_left))
+
+def reset() -> None:
+    """Clear all rate-limit state. Used by tests between runs."""
+    _windows.clear()

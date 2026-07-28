@@ -1,4 +1,4 @@
-"""Integration tests for core.settings (moto + fakeredis), incl. Design §4.4."""
+"""Integration tests for core.settings (moto), incl. Design §4.4."""
 
 from __future__ import annotations
 
@@ -46,12 +46,13 @@ async def test_empty_changes_rejected(aws: None) -> None:
         await settings.set_org_settings("org", {}, "user")
 
 
-async def test_cache_round_trip_and_invalidation(aws: None) -> None:
-    org_id = "cache-org"
-    # Prime the cache.
+async def test_read_after_write_reflects_the_change(aws: None) -> None:
+    """No cache sits between get/set anymore (settings reads DynamoDB directly,
+    see core.settings' module docstring), so this is a plain read-your-writes
+    check rather than an invalidation test."""
+    org_id = "rw-org"
     first = await settings.get_org_settings(org_id)
     assert first.currency == "USD"
-    # Write should invalidate; next read reflects the change.
     await settings.set_org_settings(org_id, {"currency": "EUR"}, "user")
     assert (await settings.get_org_settings(org_id)).currency == "EUR"
 

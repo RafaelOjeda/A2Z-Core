@@ -50,9 +50,8 @@ async def _fresh_engine() -> AsyncIterator[None]:
     ``db.engine()``/``db.session_factory()`` are ``lru_cache``'d singletons
     (matching ``core.clients``), but pytest-asyncio hands each test function
     its own event loop by default -- a connection pool built in one test's
-    loop breaks in the next. Core's own tests sidestep the same issue for
-    ``clients.redis_client()`` by monkeypatching a fresh fake per test rather
-    than reusing the cached singleton across tests; this does the
+    loop breaks in the next. Core's own tests sidestep the same issue for its
+    boto3 client singletons via ``clients.reset_clients()``; this does the
     equivalent for the real Postgres engine.
 
     The schema is dropped once per session, before the first

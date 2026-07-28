@@ -131,7 +131,9 @@ async def test_config_set_gets_sns_event_destination(
 ) -> None:
     """CLAUDE.md §8: each lazily-created config set gets a Bounce/Complaint ->
     SNS event destination, so bounces actually reach the ses_notifications
-    Lambda in AWS. Idempotent on the second send (Redis cache path)."""
+    Lambda in AWS. Idempotent on the second send -- this repeat send is
+    served from the in-process "confirmed" set (core.email._config_sets_confirmed),
+    not a fresh AlreadyExists round trip to SES."""
     from app import config
     from app.core import clients
 

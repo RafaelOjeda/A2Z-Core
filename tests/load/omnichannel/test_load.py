@@ -1,22 +1,18 @@
 """Load / latency tests for Omni-Channel hot paths (§11, Build Order Step 8).
 
-Run explicitly: ``pytest tests/load -m load -v``. These run against moto +
-fakeredis + a local Postgres, so the absolute numbers are a smoke check of the
-§11 targets, not a production SLA measurement -- same caveat as Core's own load
+Run explicitly: ``pytest tests/load -m load -v``. These run against moto and
+a local Postgres, so the absolute numbers are a smoke check of the §11
+targets, not a production SLA measurement -- same caveat as Core's own load
 suite. What they do catch is an order-of-magnitude regression (an N+1, a
 synchronous AWS call added to a hot path).
 
 Targets:
   * webhook ack        p99 < 2s   (§5.6/§11 -- Meta's retry window is ~10s, and
-                                   this is the series the §11 alarm watches)
+                                   this is the series metrics.py used to alarm)
   * inbound processing p99 < 2s   (§3 "within a couple of seconds":
                                    receipt -> visible in the inbox)
   * realtime relay         < 100ms (§6.2 publish_update target, measured
                                    publish -> frame out of the SSE relay)
-
-CloudWatch is stubbed to a no-op: metric emission is a fire-and-forget
-background task by design (metrics.py), so leaving the real client in would
-measure moto's credential failures rather than the code under test.
 """
 
 from __future__ import annotations
@@ -27,13 +23,13 @@ import hmac
 import json
 import statistics
 import time
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clients, realtime
-from app.services.omnichannel import metrics, queues, stream, webhooks, worker
+from app.services.omnichannel import queues, stream, webhooks, worker
 from app.services.omnichannel.models import ChannelConnection
 
 pytestmark = [pytest.mark.load, pytest.mark.integration]
@@ -45,13 +41,6 @@ def _p99(samples: list[float]) -> float:
     ordered = sorted(samples)
     idx = max(0, int(len(ordered) * 0.99) - 1)
     return ordered[idx]
-
-
-@pytest.fixture(autouse=True)
-def _stub_cloudwatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = Mock()
-    fake.put_metric_data = Mock(return_value={})
-    monkeypatch.setattr(clients, "cloudwatch", lambda: fake)
 
 
 def _sign(raw_body: bytes) -> str:
@@ -206,28 +195,6 @@ async def test_webhook_ack_concurrent_throughput(aws: None, session: AsyncSessio
 
     print(f"\n100 webhook acks in {elapsed:.2f}s ({elapsed / 100 * 1000:.1f}ms each)")
     assert elapsed < 20
-
-
-async def test_metrics_emit_does_not_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    """metrics.record_* must return immediately (fire-and-forget, §11)."""
-    slow = Mock()
-
-    def _slow_put(**kwargs: object) -> dict[str, object]:
-        time.sleep(0.05)  # 50ms per call, on the boto3 thread
-        return {}
-
-    slow.put_metric_data = _slow_put
-    monkeypatch.setattr(clients, "cloudwatch", lambda: slow)
-
-    start = time.perf_counter()
-    for _ in range(20):
-        metrics.record_routing_latency(1.0)
-    emit_elapsed = time.perf_counter() - start
-
-    # 20 x 50ms = 1s of CloudWatch work; scheduling it must cost ~nothing.
-    print(f"\n20 metric emits scheduled in {emit_elapsed * 1000:.2f}ms")
-    assert emit_elapsed < 0.05, "record_* is blocking on the CloudWatch round-trip"
-    await metrics.drain()
 
 
 async def test_queue_enqueue_latency(aws: None) -> None:

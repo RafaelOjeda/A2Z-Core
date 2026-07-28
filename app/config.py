@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     # When set, boto3 clients target LocalStack. Empty/None => real AWS.
     aws_endpoint_url: str | None = Field(default=None, alias="AWS_ENDPOINT_URL")
 
-    # --- Redis ---
-    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
-
     # --- Postgres (shared instance, service-owned schemas -- Omni-Channel first) ---
     database_url: str = Field(
         default="postgresql+asyncpg://a2z:a2z-local-dev-only@localhost:5432/a2z",
@@ -84,6 +81,17 @@ class Settings(BaseSettings):
     # --- Test token signing (HS256). Never used when env == "prod". ---
     test_jwt_secret: str = Field(
         default="local-development-only-not-a-real-secret", alias="TEST_JWT_SECRET"
+    )
+
+    # --- Omni-Channel worker (single-box MVP, docs/architecture/single-box-mvp.md) ---
+    # Default OFF: the API process's lifespan starts the SQS-draining worker
+    # loop only when this is set. Kept off by default so importing/booting the
+    # app (every test that uses TestClient) never spins up a background loop
+    # that would race moto's SQS state out from under test assertions -- the
+    # Dockerfile/user-data.sh turn it on for the real deployment.
+    run_omnichannel_worker: bool = Field(default=False, alias="RUN_OMNICHANNEL_WORKER")
+    omnichannel_worker_poll_interval_seconds: float = Field(
+        default=2.0, alias="OMNICHANNEL_WORKER_POLL_INTERVAL_SECONDS"
     )
 
     @property

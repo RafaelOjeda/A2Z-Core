@@ -1,8 +1,8 @@
 # A2Z Core CI — enforces the Phase 1 exit criteria (CLAUDE.md §13/§15):
 # ruff + mypy --strict clean, full suite green, core/ coverage >= 90%.
 #
-# Core's own suite runs in-process on moto + fakeredis (see tests/conftest.py)
-# -- no service container needed. Omni-Channel's Postgres data-layer tests
+# Core's own suite runs in-process on moto (see tests/conftest.py) -- no
+# service container needed. Omni-Channel's Postgres data-layer tests
 # (tests/integration/omnichannel/) are the one exception: there is no
 # in-process Postgres emulator equivalent to moto, so the `test` job runs a
 # real `postgres` service container (app/services/omnichannel/CLAUDE.md §12).

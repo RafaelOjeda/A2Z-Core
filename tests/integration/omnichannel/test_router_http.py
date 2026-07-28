@@ -6,8 +6,8 @@ This file exists to prove the *router* wiring itself: status codes, response
 envelopes, headers, and the two brand-new HTTP-only surfaces (the webhook
 GET handshake, the ``Idempotency-Key`` header) that only exist at this layer.
 
-Runs the real app via ``TestClient`` -- moto AWS + fakeredis (``aws``
-fixture) for Core (membership/secrets/events). Postgres access is via
+Runs the real app via ``TestClient`` -- moto AWS (``aws`` fixture) for
+Core (membership/secrets/events). Postgres access is via
 ``TestClient`` requests only, deliberately: Starlette's ``TestClient`` drives
 the ASGI app from its own event loop (a background-thread portal), which is
 never the same loop as an async test function's. The omnichannel conftest's

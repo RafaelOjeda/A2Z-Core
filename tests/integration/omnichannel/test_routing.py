@@ -1,7 +1,7 @@
 """Integration tests for assignment/routing (§5.3, Build Order Step 6).
 
 Runs against real Postgres (conversation_assignments rows) and real Core
-settings (moto DynamoDB + fakeredis, via the ``aws`` fixture) so
+settings (moto DynamoDB, via the ``aws`` fixture) so
 ``set_routing_config``'s metadata round-trip is genuinely exercised, not
 mocked. ``core.membership.get_membership`` is stubbed at ``access`` -- the
 single seam the authz gate resolves membership through -- since seeding

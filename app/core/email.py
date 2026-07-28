@@ -32,6 +32,7 @@ from app.config import settings as app_settings
 from app.core import clients, rate_limit
 from app.core._ddb import from_item, to_item, to_value
 from app.core.audit import ActionType, log_audit
+from app.core.cache import register_clearable
 from app.core.events import publish_event
 from app.core.exceptions import EmailError, InvalidAddressError, SuppressionListError
 from app.core.logging import get_logger
@@ -40,10 +41,17 @@ from app.core.settings import get_org_settings, set_org_settings
 log = get_logger("core.email")
 
 _EMAIL_EVENT_RETENTION = timedelta(days=90)  # CLAUDE.md §11
-_CONFIG_SET_CACHE_TTL = 24 * 3600
 # Local/dev fallback when an org hasn't set a verified domain yet. In prod the
 # org must configure a verified domain (Design §2.3 step 1).
 _DEFAULT_DOMAIN = "example.com"
+
+# Config sets we've already confirmed exist this process lifetime. Not a TTL
+# cache (unlike secrets/media) -- a config set, once created, never goes
+# away, so there's nothing to expire; a process restart just re-does one
+# cheap create-with-AlreadyExists-tolerated per org/service (see
+# _ensure_config_set). Registered so tests can reset it like any other cache.
+_config_sets_confirmed: set[str] = set()
+register_clearable(_config_sets_confirmed.clear)
 
 # Deliberately loose, same posture as _ADDRESS_RE: reject obvious garbage,
 # let SES be the real authority on whether a domain can actually be verified.
@@ -101,16 +109,16 @@ def _validate_address(to: str) -> None:
 
 
 async def _ensure_config_set(org_id: str, service_type: ServiceType) -> str:
-    """Lazily create the org/service SES config set; cache 'exists' in Redis.
+    """Lazily create the org/service SES config set; remember it for this process.
 
     One config set per ``{org_id}-{service_type}`` isolates each org's sending
-    reputation (Design §2.3 / CLAUDE.md §8). We cache existence to avoid a
-    describe/create on every send.
+    reputation (Design §2.3 / CLAUDE.md §8). We remember which ones we've
+    confirmed to avoid a create/describe round trip on every send -- SES
+    config-set APIs sit near 1 req/s, which a batch of sends would otherwise
+    hit directly.
     """
     name = _config_set_name(org_id, service_type)
-    redis = clients.redis_client()
-    cache_key = f"ses:cs:{name}"
-    if await redis.get(cache_key):
+    if name in _config_sets_confirmed:
         return name
     try:
         await clients.run_aws(
@@ -124,7 +132,7 @@ async def _ensure_config_set(org_id: str, service_type: ServiceType) -> str:
             # Non-fatal for the cache, but surface unexpected failures.
             log.info("ses.configset.error", extra={"config_set": name, "code": code})
     await _ensure_event_destination(name)
-    await redis.set(cache_key, "1", ex=_CONFIG_SET_CACHE_TTL)
+    _config_sets_confirmed.add(name)
     return name
 
 

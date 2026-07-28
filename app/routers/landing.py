@@ -328,8 +328,8 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                             ),
                             React.createElement('h3', null, 'Lightning Fast'),
                             React.createElement('p', null,
-                                ('Sub-50ms API response times and optimized '
-                                 'for scale with Redis caching.')
+                                ('Sub-50ms API response times, backed by '
+                                 'DynamoDB and in-process caching.')
                             )
                         ),
                         React.createElement('div', { className: 'feature' },
@@ -378,8 +378,8 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                                 React.createElement('h4', null, 'EventBridge')
                             ),
                             React.createElement('div', { className: 'integration-card' },
-                                React.createElement('div', { style: { fontSize: '24px' } }, '💾'),
-                                React.createElement('h4', null, 'Redis')
+                                React.createElement('div', { style: { fontSize: '24px' } }, '💌'),
+                                React.createElement('h4', null, 'SES')
                             ),
                             React.createElement('div', { className: 'integration-card' },
                                 React.createElement('div', { style: { fontSize: '24px' } }, '🔑'),

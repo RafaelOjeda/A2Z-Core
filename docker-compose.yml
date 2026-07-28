@@ -1,9 +1,11 @@
 # Local dev backing services. Brings up LocalStack (DynamoDB, S3, SES, SNS,
-# EventBridge), Redis, and Postgres so integration tests have something
-# real-ish to hit. Cognito is not emulated — tests use auth.create_test_token
-# instead. Postgres backs Omni-Channel's data layer (shared instance,
-# service-owned schemas — CLAUDE.md §2/§12, app/services/omnichannel/
-# CLAUDE.md §12): one container serves every service's Postgres schema.
+# EventBridge) and Postgres so integration tests have something real-ish to
+# hit. Cognito is not emulated — tests use auth.create_test_token instead.
+# Postgres backs Omni-Channel's (and Invoicing's) data layer (shared
+# instance, service-owned schemas — CLAUDE.md §2/§12, app/services/
+# omnichannel/CLAUDE.md §12): one container serves every service's schema.
+# No Redis: single-box MVP (docs/architecture/single-box-mvp.md) replaced it
+# with in-process state (core.realtime, core.rate_limit, core.cache).
 services:
   localstack:
     image: localstack/localstack:3
@@ -17,16 +19,6 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 5s
       timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
       retries: 10
 
   postgres:

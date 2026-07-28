@@ -1,17 +1,18 @@
-"""boto3 + Redis client factories (module-level singletons).
+"""boto3 client factories (module-level singletons).
 
-This is the *only* place Core builds AWS / Redis clients (CLAUDE.md §4):
-
-  * boto3 clients are sync; we build them once and reuse. Hot-path Core
-    functions must never construct a client. To keep the spec's ``async def``
-    signatures non-blocking, wrap each sync AWS call in :func:`run_aws`, which
-    offloads to a thread (``asyncio.to_thread``).
-  * Redis uses the native async client (``redis.asyncio``) with a shared
-    connection pool.
+This is the *only* place Core builds AWS clients (CLAUDE.md §4): boto3
+clients are sync; we build them once and reuse. Hot-path Core functions must
+never construct a client. To keep the spec's ``async def`` signatures
+non-blocking, wrap each sync AWS call in :func:`run_aws`, which offloads to a
+thread (``asyncio.to_thread``).
 
 Endpoint URLs come from config so LocalStack can override every service via
 ``AWS_ENDPOINT_URL`` (CLAUDE.md §12). Credentials come from the ECS task IAM
 role in AWS; LocalStack accepts the dummy ``test`` creds from ``.env``.
+
+(Redis is gone -- single-box MVP, docs/architecture/single-box-mvp.md --
+so there is no longer a Redis factory here; see ``core.realtime``,
+``core.rate_limit``, and ``core.cache`` for what replaced it.)
 """
 
 from __future__ import annotations
@@ -23,13 +24,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 import boto3
 import httpx
-import redis.asyncio as aioredis
 from botocore.config import Config as BotoConfig
 
 from app.config import settings
 
 if TYPE_CHECKING:  # import only for type checkers; avoids runtime cost
-    from mypy_boto3_cloudwatch import CloudWatchClient
     from mypy_boto3_dynamodb import DynamoDBClient
     from mypy_boto3_events import EventBridgeClient
     from mypy_boto3_s3 import S3Client
@@ -89,37 +88,11 @@ def secretsmanager() -> SecretsManagerClient:
 
 
 @lru_cache(maxsize=1)
-def cloudwatch() -> CloudWatchClient:
-    # Custom service metrics (Omni-Channel's A2Z/OmniChannel namespace,
-    # app/services/omnichannel/CLAUDE.md §11). Structured logs still go via
-    # core.logging; this is only for the numeric metrics alarms watch.
-    return cast("CloudWatchClient", _client("cloudwatch"))
-
-
-@lru_cache(maxsize=1)
 def sqs() -> SQSClient:
     # Service-owned queueing (Omni-Channel's shared inbound/outbound queues,
     # app/services/omnichannel/CLAUDE.md §5.6/§12) -- lives here per this
     # module's own rule: the only place boto3 clients are built.
     return cast("SQSClient", _client("sqs"))
-
-
-@lru_cache(maxsize=1)
-def redis_client() -> aioredis.Redis[str]:
-    """Shared async Redis client (decodes responses to str)."""
-    return aioredis.from_url(settings().redis_url, decode_responses=True)
-
-
-@lru_cache(maxsize=1)
-def boto3_session() -> boto3.Session:
-    """Shared boto3 Session, used by core.realtime to get SigV4 credentials."""
-    return boto3.Session(region_name=settings().aws_region)
-
-
-@lru_cache(maxsize=1)
-def appsync_http_client() -> httpx.AsyncClient:
-    """Shared async HTTP client for AppSync GraphQL calls (core.realtime)."""
-    return httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
 
 
 @lru_cache(maxsize=1)
@@ -136,18 +109,5 @@ async def run_aws[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 
 def reset_clients() -> None:
     """Clear cached clients. Used by tests after pointing at a fresh backend."""
-    for factory in (
-        dynamodb,
-        s3,
-        ses,
-        sns,
-        eventbridge,
-        secretsmanager,
-        sqs,
-        cloudwatch,
-        redis_client,
-    ):
-        # redis_client may be monkeypatched in tests (no lru_cache wrapper).
-        clear = getattr(factory, "cache_clear", None)
-        if clear is not None:
-            clear()
+    for factory in (dynamodb, s3, ses, sns, eventbridge, secretsmanager, sqs):
+        factory.cache_clear()

@@ -1,4 +1,4 @@
-"""Unit tests for core.rate_limit (fakeredis)."""
+"""Unit tests for core.rate_limit (in-process sliding window)."""
 
 from __future__ import annotations
 

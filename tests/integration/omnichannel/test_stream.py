@@ -1,10 +1,9 @@
 """Integration tests for the SSE real-time relay (§5.4, Build Order Step 7).
 
-Runs against fakeredis (the autouse ``fake_redis`` fixture in the top-level
-conftest) -- real pub/sub, no mocking of the transport. The round-trip test
-is the load-bearing one: it publishes through ``core.realtime.publish_update``
-and receives through ``stream.stream_events``, locking the ``rt:{channel}``
-key convention across the Core publish side and the service relay side so
+Runs against Core's real in-process pub/sub broker (``core.realtime`) -- no
+mocking of the transport. The round-trip test is the load-bearing one: it
+publishes through ``core.realtime.publish_update`` and receives through
+``stream.stream_events``, locking the two sides of the contract together so
 either drifting fails here.
 """
 

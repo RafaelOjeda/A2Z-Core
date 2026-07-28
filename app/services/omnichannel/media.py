@@ -24,7 +24,7 @@ Two invariants:
 
 from __future__ import annotations
 
-from app.core import clients
+from app.core.cache import TTLCache
 from app.core.exceptions import StorageError
 from app.core.logging import get_logger
 from app.core.storage import generate_signed_url
@@ -33,6 +33,7 @@ log = get_logger("omnichannel.media")
 
 _SIGN_EXPIRY_SECONDS = 2 * 3600  # 2h -- must exceed the cache TTL below
 _CACHE_TTL_SECONDS = 3600  # 1h (§10)
+_cache = TTLCache()
 
 
 def _cache_key(s3_key: str) -> str:
@@ -61,14 +62,13 @@ async def signed_url_for_attachment(org_id: str, s3_key: str) -> str:
         # itself skips. Never mint a URL for another org's object.
         raise StorageError("File does not belong to this org")
 
-    redis = clients.redis_client()
     cache_key = _cache_key(s3_key)
-    cached = await redis.get(cache_key)
+    cached = _cache.get(cache_key)
     if cached is not None:
         log.info("omnichannel.mediaurl.cache_hit", extra={"org_id": org_id})
-        return str(cached)
+        return cached
 
     url = generate_signed_url(s3_key, expires_in=_SIGN_EXPIRY_SECONDS)
-    await redis.set(cache_key, url, ex=_CACHE_TTL_SECONDS)
+    _cache.set(cache_key, url, ttl_seconds=_CACHE_TTL_SECONDS)
     log.info("omnichannel.mediaurl.cache_miss", extra={"org_id": org_id})
     return url

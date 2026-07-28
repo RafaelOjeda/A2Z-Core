@@ -1,93 +1,112 @@
 # Infrastructure (Terragrunt)
 
-> See also: [`docs/architecture/deployment.md`](../docs/architecture/deployment.md) for the two deployment shapes this repo describes (Core's ECS Fargate control plane vs. Omni-Channel's single-EC2 MVP) and exactly which of the modules below back which shape.
+> See also: [`docs/architecture/deployment.md`](../docs/architecture/deployment.md) and [`docs/architecture/single-box-mvp.md`](../docs/architecture/single-box-mvp.md) for the deployment shape this repo now targets.
 
 Terraform/Terragrunt for A2Z Core's AWS resources. The data-plane modules here
 mirror exactly what `scripts/create_local_resources.py` stands up against
-LocalStack (CLAUDE.md §12), so local and AWS stay in sync. The control-plane
-modules (vpc/iam/redis/cognito/ecs) carry the monolith itself: Fargate behind
-an ALB, ElastiCache for the Core caches, Cognito with the post-confirm trigger,
-and least-privilege task/Lambda roles (golden rule #5: no static keys).
+LocalStack (CLAUDE.md §12), so local and AWS stay in sync. Everything else
+carries the **single-box MVP**: one EC2 instance running the app + a Postgres
+container + Caddy (TLS), one IAM role, one VPC with a public subnet and no
+NAT gateway. This replaced an earlier ECS Fargate + ALB + ElastiCache + RDS
+shape that was sized for ~1K orgs; at one user, that shape cost roughly
+6x what this one does for identical functionality. See the cost table below.
 
 ## Layout
 
 ```
 infra/
-├── terragrunt.hcl            # root: remote state, provider, default tags
+├── terragrunt.hcl                     # root: remote state, provider, default tags
 ├── modules/
-│   ├── dynamodb/             # all 6 Core tables (on-demand, GSIs, TTL, PITR)
-│   ├── s3/                   # private ledger bucket (lifecycle, SSE, no public)
-│   ├── eventbridge/          # a2z-bus custom event bus
-│   ├── ses/                  # SNS notifications topic + policy + domain identity
-│   ├── vpc/                  # 2-AZ subnets, 1 NAT, free DDB/S3 gateway endpoints, SGs
-│   ├── iam/                  # task + execution + Lambda roles (least privilege)
-│   ├── redis/                # ElastiCache cache.t4g.micro (single node) -- Core's
-│   │                         #   control-plane cache; Omni-Channel's MVP EC2 box uses
-│   │                         #   an on-box Redis container instead (not this module)
-│   ├── cognito/              # user pool, SPA client, both Lambdas + trigger/SNS wiring
-│   ├── ecs/                  # ECR, cluster, task def, ALB (:80), service, autoscaling
-│   ├── rds/                  # single-AZ Postgres (db.t4g.micro) -- codified ahead of
-│   │                         #   need, see the drift note below
-│   └── sqs-omnichannel/      # Omni-Channel's inbound/outbound queues + DLQs
+│   ├── dynamodb/                      # all 6 Core tables (on-demand, GSIs, TTL, PITR)
+│   ├── s3/                            # private ledger bucket (lifecycle, SSE, no public)
+│   ├── eventbridge/                   # a2z-bus custom event bus (publisher only; no rules/subscribers yet)
+│   ├── ses/                           # SNS notifications topic + policy + domain identity
+│   ├── ecr/                           # the one image repo (app/Dockerfile)
+│   ├── vpc/                           # one public subnet, one AZ, free DDB/S3 gateway endpoints, one SG
+│   ├── iam/                           # one EC2 instance role -- Dynamo/S3/SES/EventBridge/SQS/SecretsManager/ECR-pull
+│   ├── cognito/                       # user pool + SPA client only (no Lambda -- see app/dependencies.py)
+│   ├── ec2-simple/                    # the instance: app + postgres + caddy via docker-compose (user-data.sh)
+│   ├── ses-notifications-subscription/ # SNS -> HTTPS subscription to the box's webhook route
+│   └── sqs-omnichannel/               # Omni-Channel's inbound/outbound queues + DLQs
 └── live/
-    └── prod/                 # per-module Terragrunt compositions
-        ├── dynamodb/  s3/  eventbridge/  ses/
-        ├── vpc/  iam/  redis/  cognito/  ecs/
-        └── rds/  sqs-omnichannel/
+    └── prod/                          # per-module Terragrunt compositions, one dir per module above
 ```
 
-> **Drift note**: `modules/rds` + `live/prod/rds` are codified but nothing
-> currently deploys against them — Omni-Channel's Postgres runs as an
-> on-box/docker-compose container today
-> (`app/services/omnichannel/CLAUDE.md` §12 explicitly defers RDS to a
-> future "distribution phase"), and `docs/phase2-invoicing.md` still lists
-> an RDS module as Phase 2 future work. Treat this module as pre-built
-> infrastructure for whichever need arrives first, not as evidence either
-> phase has started. See
-> [Omni-Channel known issues](../docs/services/omnichannel/known-issues.md#4-rds-terraform-module-exists-ahead-of-both-phases-that-would-use-it).
->
-> Not yet codified at all: `ec2-app`, `secretsmanager-channels`, and
-> `ses-receipt-rules` — the three modules Omni-Channel's single-EC2 MVP
-> (`app/services/omnichannel/CLAUDE.md` §12) still needs.
-
 Cross-module wiring uses Terragrunt `dependency` blocks with `mock_outputs`
-(so `validate`/`plan` work before first apply); Terragrunt derives the apply
-order from them: data-plane + vpc → iam → redis/cognito → ecs.
+(so `validate`/`plan` work before first apply). Apply order, derived from
+those dependencies:
+
+```
+dynamodb, s3, eventbridge, ses, ecr, sqs-omnichannel   (leaves, no deps)
+  -> vpc
+  -> iam            (needs eventbridge + ecr)
+  -> cognito         (leaf again -- no Lambda, no deps left)
+  -> ec2             (needs vpc, iam, ecr, ses, cognito)
+  -> ses-notifications-subscription   (needs ses + ec2; see its own header for why it's last)
+```
 
 ## Apply
 
 ```bash
-# 1. The cognito module deploys app/lambdas/* from one zip — build it first:
-bash scripts/build_lambda.sh                      # -> dist/lambda.zip
-
 cd infra/live/prod
 terragrunt run-all plan
 terragrunt run-all apply
 
-# 2. ECS pulls the monolith image from the ECR repo the ecs module creates —
-#    build and push before (or right after) the first ecs apply:
-docker build -t <ecr_repository_url>:latest . && docker push <ecr_repository_url>:latest
+# Build and push the image once ecr exists (the ec2 module pulls it on boot):
+docker build -t <ecr_repository_url>:latest .
+docker push <ecr_repository_url>:latest
 ```
 
-## Cost posture (CLAUDE.md §10/§11)
+**Two things you must set before `ec2` applies cleanly (deliberately no
+defaults, to avoid a real value ever being committed):**
 
-- **DynamoDB on-demand** everywhere — no capacity planning at MVP volume.
-- **TTL enabled** on audit / email-events / files — DynamoDB expires items free.
-- **S3 lifecycle**: 30d → IA → Glacier, expire 90d; abort stale multipart uploads.
-- **EventBridge** ~$1/M events — negligible.
-- **Single region** (us-east-1).
+- `postgres_password` in `live/prod/ec2/terragrunt.hcl` -- override via
+  `-var` or a gitignored `*.auto.tfvars`.
+- A real domain pointed at the `ec2` module's Elastic IP, then
+  `endpoint_url` in `live/prod/ses-notifications-subscription/terragrunt.hcl`
+  and the (currently blank) `DOMAIN_NAME` in
+  `modules/ec2-simple/user-data.sh` -- see that file's Caddyfile comment.
+  Until DNS is live, Caddy serves plain HTTP and the SNS subscription sits
+  "pending confirmation"; both are inert, not broken, in that state.
 
-## Not yet codified (planned)
+## Cost posture
 
-- **ACM + HTTPS listener** — the ALB serves :80 only until a domain + cert
-  exist; add the :443 listener and redirect then.
-- **Route53** — DNS for the ALB and the SES domain-verification records.
-- **RDS actually wired up and applied** — the `rds` module itself already
-  exists (see the drift note above); what's still pending is a real
-  `terragrunt apply` and something pointing `DATABASE_URL` at it instead of
-  a container.
+At one user, ~$22/mo, down from ~$130-140/mo for the prior ECS/RDS/
+ElastiCache/ALB/NAT shape:
+
+| Item | ~$/mo | Notes |
+|---|---|---|
+| EC2 (t4g.small) | ~12 | app + Postgres + Caddy, one box |
+| EBS gp3 30GB | ~2.40 | Postgres data lives here -- see the backup note below |
+| Elastic IP | ~3.60 | |
+| DynamoDB (on-demand) | ~1 | all 6 Core tables |
+| S3 | ~1 | invoice PDFs, message attachments |
+| SES / SNS / SQS / EventBridge | ~0-1 | usage-based, negligible at this volume |
+| Secrets Manager | ~0.40/secret | per-org channel credentials |
+
+Cut entirely: NAT gateway (~$32), ALB (~$18), ECS/Fargate + autoscaling
+(~$30), ElastiCache (~$13), RDS (~$20), both Lambdas. See
+[`docs/architecture/single-box-mvp.md`](../docs/architecture/single-box-mvp.md)
+for what replaced each one in application code.
+
+**Non-negotiable operational gap:** the nightly `pg_dump -> S3` cron in
+`user-data.sh` is the only backup for Postgres -- there is no RDS safety
+net. A restore from it has not been drilled; treat that as the single
+highest-risk item before trusting this with real data (matches the same
+open item already tracked in `app/services/omnichannel/CLAUDE.md` §16).
+
+## Not yet codified (deliberately out of scope for the single-box MVP)
+
+- **A CloudWatch agent / alarms** -- `metrics.py` writes structured logs
+  only; there is no agent shipping them off-box and no alarms watching the
+  series it emits. Revisit if/when this needs to distribute again.
+- **Route53** -- DNS for the box's domain is a manual step (see above), not
+  Terraform-managed.
+- **A real HA story** -- one instance, one AZ, one Postgres. Documented
+  trade-off of the single-box MVP, not an oversight.
 
 Config sets are intentionally **not** in Terraform: Core creates one per
-`{org_id}-{service_type}` lazily on first send (CLAUDE.md §8). Terraform owns the
-shared SNS topic the `ses_notifications` Lambda subscribes to — the cognito
-module subscribes the Lambda to it.
+`{org_id}-{service_type}` lazily on first send (CLAUDE.md §8), cached
+in-process. Terraform owns the shared SNS topic; the
+`ses-notifications-subscription` module subscribes the app's HTTPS route to
+it (`app/routers/ses_notifications.py` -- no Lambda anymore).

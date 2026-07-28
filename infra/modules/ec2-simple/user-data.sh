@@ -1,78 +1,136 @@
 #!/bin/bash
 set -e
 
-# A2Z Core EC2 user data script
-# Installs Docker, pulls the application image, and starts the service
+# A2Z Core EC2 user data script -- single-box MVP
+# (docs/architecture/single-box-mvp.md).
+#
+# Every ${...} below is a Terraform template variable (see main.tf's
+# templatefile() call) substituted once at `terraform apply` time -- this
+# script contains no bash-native variable expansion except where noted with
+# a bare `$NAME` (no braces), which Terraform's templatefile leaves alone.
+#
+# Runs three containers via docker-compose, supervised as one unit so the
+# existing "SSH in, journalctl -u a2z-core" troubleshooting story
+# (DEPLOYMENT.md) still works for all three:
+#   * postgres -- Omni-Channel + Invoicing's data layer. No RDS at MVP.
+#   * app      -- the FastAPI monolith. RUN_OMNICHANNEL_WORKER=true here
+#                 (nowhere else -- see Dockerfile/app/main.py's lifespan)
+#                 since this is the one place the whole platform runs.
+#   * caddy    -- TLS termination. Webhook providers (Meta, SES/SNS) require
+#                 valid HTTPS; there is no ALB to do this for us anymore.
 
 echo "=== A2Z Core EC2 Setup ==="
 echo "Environment: ${environment}"
 echo "Region: ${aws_region}"
 
-# Update system
 apt-get update
 apt-get upgrade -y
 
-# Install Docker
-apt-get install -y docker.io
-systemctl start docker
-systemctl enable docker
+# --- Docker + Compose plugin ---
+apt-get install -y docker.io docker-compose-plugin awscli
+systemctl enable --now docker
 
-# Install Docker Compose (optional, for complex setups)
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-
-# Install AWS CLI for ECR login
-apt-get install -y awscli
-
-# Configure Docker for ECR
-aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${ecr_repository_url}
-
-# Create application directory
 mkdir -p /opt/a2z-core
 cd /opt/a2z-core
 
-# Pull and run the Docker image
-docker pull ${ecr_repository_url}:${docker_image_tag}
+# --- ECR login (the instance role grants ecr:GetAuthorizationToken + pull --
+#     see infra/modules/iam) ---
+aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${ecr_repository_url}
 
-# Create environment file
-cat > /opt/a2z-core/.env << EOF
-# Database
-DATABASE_URL=${database_url}
-
-# Redis
-REDIS_URL=${redis_url}
-
-# AWS Region
+# --- App environment. Only non-default values need setting -- everything
+#     else falls back to app/config.py's defaults (table names, bucket,
+#     event bus, queue names all already match). ---
+cat > /opt/a2z-core/.env <<EOF
+A2Z_ENV=${environment}
 AWS_REGION=${aws_region}
+DATABASE_URL=postgresql+asyncpg://a2z:${postgres_password}@postgres:5432/a2z
+COGNITO_USER_POOL_ID=${cognito_user_pool_id}
+COGNITO_APP_CLIENT_ID=${cognito_app_client_id}
+COGNITO_REGION=${aws_region}
+SES_NOTIFICATIONS_TOPIC_ARN=${ses_notifications_topic_arn}
+RUN_OMNICHANNEL_WORKER=true
+EOF
+chmod 600 /opt/a2z-core/.env
 
-# Environment
-ENVIRONMENT=${environment}
-
-# Server
-HOST=0.0.0.0
-PORT=8000
+# --- Caddyfile. Bare $DOMAIN_NAME/$CADDY_SITE below are real bash
+#     variables (no braces) evaluated on the box, not Terraform template
+#     vars -- see the file header. Set a real domain (and point its DNS A
+#     record at this instance's Elastic IP) to get automatic Let's Encrypt
+#     TLS; left blank, Caddy serves plain HTTP on :80 so the box is at
+#     least reachable, and TLS is a manual follow-up before accepting real
+#     webhook traffic. ---
+DOMAIN_NAME=""
+if [ -n "$DOMAIN_NAME" ]; then
+  CADDY_SITE="$DOMAIN_NAME"
+else
+  CADDY_SITE=":80"
+fi
+cat > /opt/a2z-core/Caddyfile <<EOF
+$CADDY_SITE {
+    reverse_proxy app:8000
+}
 EOF
 
-# Create systemd service for the application
-cat > /etc/systemd/system/a2z-core.service << EOF
+# --- docker-compose.yml: the three containers, one unit ---
+cat > /opt/a2z-core/docker-compose.yml <<EOF
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=a2z
+      - POSTGRES_PASSWORD=${postgres_password}
+      - POSTGRES_DB=a2z
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U a2z -d a2z"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    image: ${ecr_repository_url}:${docker_image_tag}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: /opt/a2z-core/.env
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/a2z-core/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+EOF
+
+# --- systemd unit: one process (docker compose, foreground) to supervise ---
+cat > /etc/systemd/system/a2z-core.service <<EOF
 [Unit]
-Description=A2Z Core FastAPI Application
+Description=A2Z Core (app + postgres + caddy via docker compose)
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-User=root
 WorkingDirectory=/opt/a2z-core
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-EnvironmentFile=/opt/a2z-core/.env
-ExecStartPre=-/usr/bin/docker pull ${ecr_repository_url}:${docker_image_tag}
-ExecStart=/usr/bin/docker run --rm \
-  --name a2z-core \
-  -p 8000:8000 \
-  --env-file /opt/a2z-core/.env \
-  ${ecr_repository_url}:${docker_image_tag}
-ExecStop=/usr/bin/docker stop a2z-core
+ExecStartPre=-/usr/bin/docker compose pull
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -82,13 +140,37 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Enable and start the service
 systemctl daemon-reload
 systemctl enable a2z-core
 systemctl start a2z-core
 
-# Set up CloudWatch logs agent (optional)
-# wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-# dpkg -i amazon-cloudwatch-agent.deb
+# --- Nightly Postgres backup -> S3 (non-negotiable: no RDS safety net here,
+#     app/services/omnichannel/CLAUDE.md §12). Reuses the ledger bucket's
+#     existing IAM grant (s3:PutObject on arn:aws:s3:::<bucket>/*, already
+#     covers this prefix) rather than needing a new one. NOTE: the ledger
+#     bucket's lifecycle rule (infra/modules/s3) is tuned for invoice
+#     PDFs/attachments, not backups specifically -- if backups need their
+#     own shorter/longer retention than whatever that rule expires objects
+#     at, add a prefix-scoped rule to that module rather than assuming this
+#     script's 30-day local cleanup is the only retention in effect. ---
+cat > /opt/a2z-core/backup-postgres.sh <<'BACKUP_EOF'
+#!/bin/bash
+set -euo pipefail
+STAMP="$(date +%F-%H%M)"
+FILE="/tmp/a2z-postgres-$STAMP.sql.gz"
+docker compose -f /opt/a2z-core/docker-compose.yml exec -T postgres \
+  pg_dump -U a2z a2z | gzip > "$FILE"
+aws s3 cp "$FILE" "s3://${s3_bucket}/backups/postgres/$STAMP.sql.gz"
+rm -f "$FILE"
+# No retention/pruning here -- objects accumulate under backups/postgres/
+# until whatever S3 lifecycle rule applies to that prefix (see the note
+# above this heredoc) expires them.
+BACKUP_EOF
+chmod +x /opt/a2z-core/backup-postgres.sh
+
+cat > /etc/cron.d/a2z-core-backup <<EOF
+0 3 * * * root /opt/a2z-core/backup-postgres.sh >> /var/log/a2z-core-backup.log 2>&1
+EOF
+chmod 644 /etc/cron.d/a2z-core-backup
 
 echo "=== A2Z Core EC2 Setup Complete ==="

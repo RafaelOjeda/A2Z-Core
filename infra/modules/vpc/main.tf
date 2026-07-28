@@ -1,13 +1,20 @@
-# Network for the A2Z Core monolith (CLAUDE.md §2: ECS Fargate, single region).
+# Network for the A2Z Core single-box MVP (docs/architecture/single-box-mvp.md).
 #
-# Deliberately MVP-lean (§14):
-#   * two AZs — the floor, not gold-plating: an ALB requires two subnets.
-#   * ONE NAT gateway (single AZ) for private-subnet egress: SES API,
-#     EventBridge, ECR pulls, Cognito JWKS. ~$32/mo (docs/cost-notes.md).
-#   * FREE gateway VPC endpoints for DynamoDB + S3 — they carry the bulk of
-#     Core's traffic off the NAT (NAT charges per-GB; this is the cost lever).
-#     Paid interface endpoints (SES/events/ECR, ~$7/mo each) are skipped at
-#     MVP volume; that traffic rides the NAT.
+# Deliberately MVP-lean, trimmed further than the original ECS-shaped
+# network (§14):
+#   * ONE public subnet, ONE AZ — there is one EC2 instance, not an ALB
+#     needing two AZs' worth of subnets.
+#   * NO NAT gateway, NO private subnets: the box sits in the public subnet
+#     with its own Elastic IP and reaches AWS APIs directly. That was the
+#     single biggest line item in the old network (~$32/mo) and it existed
+#     only to give a *private* subnet's tasks egress -- there's no private
+#     subnet left to serve.
+#   * FREE gateway VPC endpoints for DynamoDB + S3 are kept anyway: they're
+#     zero-cost and keep that traffic off the public internet path even
+#     though the box itself has a public IP.
+#   * ONE security group: the box terminates its own TLS (Caddy) and talks
+#     to Postgres over localhost inside the same box -- there is no ALB SG
+#     and no separate redis/rds SGs to manage.
 
 variable "name_prefix" {
   type    = string
@@ -24,10 +31,7 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
-  # /20 slices: public .0/.16, private .32/.48
-  public_cidrs  = [for i in range(2) : cidrsubnet(var.cidr_block, 4, i)]
-  private_cidrs = [for i in range(2) : cidrsubnet(var.cidr_block, 4, i + 2)]
+  az = data.aws_availability_zones.available.names[0]
 }
 
 resource "aws_vpc" "main" {
@@ -43,33 +47,11 @@ resource "aws_internet_gateway" "igw" {
 }
 
 resource "aws_subnet" "public" {
-  count                   = 2
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = local.public_cidrs[count.index]
-  availability_zone       = local.azs[count.index]
+  cidr_block              = cidrsubnet(var.cidr_block, 4, 0)
+  availability_zone       = local.az
   map_public_ip_on_launch = true
-  tags                    = { Name = "${var.name_prefix}-public-${local.azs[count.index]}" }
-}
-
-resource "aws_subnet" "private" {
-  count             = 2
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = local.private_cidrs[count.index]
-  availability_zone = local.azs[count.index]
-  tags              = { Name = "${var.name_prefix}-private-${local.azs[count.index]}" }
-}
-
-# --- Egress: one NAT in the first public subnet (§14: no per-AZ NAT) ---
-resource "aws_eip" "nat" {
-  domain = "vpc"
-  tags   = { Name = "${var.name_prefix}-nat" }
-}
-
-resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-  tags          = { Name = var.name_prefix }
-  depends_on    = [aws_internet_gateway.igw]
+  tags                    = { Name = "${var.name_prefix}-public-${local.az}" }
 }
 
 resource "aws_route_table" "public" {
@@ -81,35 +63,19 @@ resource "aws_route_table" "public" {
   tags = { Name = "${var.name_prefix}-public" }
 }
 
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat.id
-  }
-  tags = { Name = "${var.name_prefix}-private" }
-}
-
 resource "aws_route_table_association" "public" {
-  count          = 2
-  subnet_id      = aws_subnet.public[count.index].id
+  subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table_association" "private" {
-  count          = 2
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
-}
-
-# --- Free gateway endpoints: DynamoDB + S3 traffic bypasses the NAT ---
+# --- Free gateway endpoints: DynamoDB + S3 traffic bypasses the public internet ---
 data "aws_region" "current" {}
 
 resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.dynamodb"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private.id]
+  route_table_ids   = [aws_route_table.public.id]
   tags              = { Name = "${var.name_prefix}-ddb" }
 }
 
@@ -117,98 +83,36 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private.id]
+  route_table_ids   = [aws_route_table.public.id]
   tags              = { Name = "${var.name_prefix}-s3" }
 }
 
-# --- Security groups: alb -> app:8000 -> redis:6379, nothing else ---
-resource "aws_security_group" "alb" {
-  name_prefix = "${var.name_prefix}-alb-"
+# --- One security group: the internet -> the box, nothing else ---
+resource "aws_security_group" "app" {
+  name_prefix = "${var.name_prefix}-app-"
   vpc_id      = aws_vpc.main.id
-  description = "Public ALB"
+  description = "The single EC2 instance -- Caddy terminates TLS on :443, webhooks/SSH need direct ingress"
 
   ingress {
-    description = "HTTP"
+    description = "HTTP (Caddy redirects to HTTPS; also serves ACME HTTP-01 challenges)"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
   ingress {
-    description = "HTTPS (listener added with ACM cert; open now so no SG churn later)"
+    description = "HTTPS -- webhook providers (Meta, SES/SNS) call in here directly"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_security_group" "app" {
-  name_prefix = "${var.name_prefix}-app-"
-  vpc_id      = aws_vpc.main.id
-  description = "Fargate tasks (uvicorn :8000), reachable only from the ALB"
-
   ingress {
-    description     = "app port from ALB"
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "SSH for operator access -- narrow this to a known IP/range before going live"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_security_group" "redis" {
-  name_prefix = "${var.name_prefix}-redis-"
-  vpc_id      = aws_vpc.main.id
-  description = "ElastiCache, reachable only from app tasks"
-
-  ingress {
-    description     = "redis from app"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_security_group" "rds" {
-  name_prefix = "${var.name_prefix}-rds-"
-  vpc_id      = aws_vpc.main.id
-  description = "Shared Postgres RDS instance, reachable only from app tasks"
-
-  ingress {
-    description     = "postgres from app"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
   }
   egress {
     from_port   = 0
@@ -225,26 +129,10 @@ output "vpc_id" {
   value = aws_vpc.main.id
 }
 
-output "public_subnet_ids" {
-  value = aws_subnet.public[*].id
-}
-
-output "private_subnet_ids" {
-  value = aws_subnet.private[*].id
-}
-
-output "alb_sg_id" {
-  value = aws_security_group.alb.id
+output "public_subnet_id" {
+  value = aws_subnet.public.id
 }
 
 output "app_sg_id" {
   value = aws_security_group.app.id
-}
-
-output "redis_sg_id" {
-  value = aws_security_group.redis.id
-}
-
-output "rds_sg_id" {
-  value = aws_security_group.rds.id
 }

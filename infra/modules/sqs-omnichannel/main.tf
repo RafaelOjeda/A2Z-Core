@@ -5,8 +5,8 @@
 # (app/services/omnichannel/CLAUDE.md §7/§11).
 #
 # Any DLQ depth > 0 means a message failed processing repeatedly and needs a
-# human (§10) — that alarm is wired in the ecs/observability modules, not
-# here; this module only shapes the queues themselves.
+# human (§10) — that alarm is CloudWatch-side config, not here; this module
+# only shapes the queues themselves.
 
 variable "name_prefix" {
   type    = string

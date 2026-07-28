@@ -6,9 +6,9 @@ terraform {
   source = "../../../modules/iam"
 }
 
-# Terragrunt wires module outputs together via dependency blocks (first use in
-# this repo): outputs of the referenced stack become inputs here. mock_outputs
-# let `validate`/`plan` run before the dependency has ever been applied.
+# Terragrunt wires module outputs together via dependency blocks: outputs of
+# the referenced stack become inputs here. mock_outputs let `validate`/`plan`
+# run before the dependency has ever been applied.
 dependency "eventbridge" {
   config_path = "../eventbridge"
 
@@ -18,9 +18,19 @@ dependency "eventbridge" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan"]
 }
 
+dependency "ecr" {
+  config_path = "../ecr"
+
+  mock_outputs = {
+    repository_arn = "arn:aws:ecr:us-east-1:000000000000:repository/a2z-core"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan"]
+}
+
 inputs = {
-  name_prefix   = "a2z-core"
-  table_prefix  = "a2z-core"
-  bucket_name   = "a2z-ledger"
-  event_bus_arn = dependency.eventbridge.outputs.bus_arn
+  name_prefix        = "a2z-core"
+  table_prefix       = "a2z-core"
+  bucket_name        = "a2z-ledger"
+  event_bus_arn      = dependency.eventbridge.outputs.bus_arn
+  ecr_repository_arn = dependency.ecr.outputs.repository_arn
 }

@@ -1,29 +1,26 @@
-# Single EC2 instance for A2Z Core (simplified deployment)
+# Single EC2 instance for A2Z Core (single-box MVP, docs/architecture/single-box-mvp.md).
 #
-# This module replaces the complex ECS setup with a simple EC2 instance.
-# The instance runs Docker containers for the FastAPI application.
-#
-# Before first deployment:
-#   1. Build Docker image: docker build -t a2z-core:latest .
-#   2. Create ECR repo: aws ecr create-repository --repository-name a2z-core
-#   3. Push image: docker tag a2z-core:latest <account>.dkr.ecr.<region>.amazonaws.com/a2z-core:latest
-#                  docker push <account>.dkr.ecr.<region>.amazonaws.com/a2z-core:latest
+# Runs the whole platform on one box: the app container (API + the
+# Omni-Channel worker as a lifespan task, RUN_OMNICHANNEL_WORKER=true — see
+# app/main.py's lifespan and Dockerfile), a Postgres container (no RDS), and
+# Caddy for TLS termination. user-data.sh does all of the setup; this file
+# just launches the instance with the right role/network/user-data.
 
 variable "instance_type" {
-  type    = string
-  default = "t3.medium"
-  description = "EC2 instance type (t3.micro for micro workloads, t3.small/medium for testing)"
+  type        = string
+  default     = "t4g.small"
+  description = "EC2 instance type -- t4g.small (2 vCPU/2GB, arm64/Graviton) is the MVP default; bump if Postgres+app contend for memory."
 }
 
 variable "environment" {
-  type    = string
-  default = "dev"
+  type        = string
+  default     = "prod"
   description = "Environment name (dev, staging, prod)"
 }
 
 variable "app_name" {
-  type    = string
-  default = "a2z-core"
+  type        = string
+  default     = "a2z-core"
   description = "Application name for tagging"
 }
 
@@ -32,40 +29,56 @@ variable "vpc_id" {
 }
 
 variable "public_subnet_id" {
-  type = string
+  type        = string
   description = "Public subnet ID for the EC2 instance"
 }
 
 variable "app_sg_id" {
-  type = string
+  type        = string
   description = "Security group ID for the application"
 }
 
-variable "task_role_arn" {
-  type = string
-  description = "IAM role ARN for EC2 instance (provides AWS API permissions)"
+variable "app_role_name" {
+  type        = string
+  description = "Name (not ARN) of the IAM role this instance assumes -- from the iam module's app_role_name output."
 }
 
 variable "ecr_repository_url" {
-  type = string
-  description = "ECR repository URL for the Docker image"
+  type        = string
+  description = "ECR repository URL for the Docker image (from the ecr module)"
 }
 
 variable "docker_image_tag" {
-  type    = string
-  default = "latest"
+  type        = string
+  default     = "latest"
   description = "Docker image tag to deploy"
 }
 
-variable "database_url" {
+variable "postgres_password" {
   type        = string
   sensitive   = true
-  description = "RDS database connection string"
+  description = "Password for the on-box Postgres container. Override via -var/tfvars; never commit a real value."
 }
 
-variable "redis_url" {
+variable "s3_bucket" {
   type        = string
-  description = "Redis connection string"
+  default     = "a2z-ledger"
+  description = "Ledger bucket (app/config.py's S3_BUCKET) -- the nightly Postgres backup writes under its backups/ prefix."
+}
+
+variable "cognito_user_pool_id" {
+  type    = string
+  default = ""
+}
+
+variable "cognito_app_client_id" {
+  type    = string
+  default = ""
+}
+
+variable "ses_notifications_topic_arn" {
+  type    = string
+  default = ""
 }
 
 data "aws_ami" "ubuntu" {
@@ -83,13 +96,11 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-data "aws_iam_role" "ec2_role" {
-  name = "a2z-core-ec2-role"
-}
+data "aws_region" "current" {}
 
 resource "aws_iam_instance_profile" "app_profile" {
   name = "${var.app_name}-ec2-profile-${var.environment}"
-  role = data.aws_iam_role.ec2_role.name
+  role = var.app_role_name
 }
 
 resource "aws_instance" "app" {
@@ -99,14 +110,16 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [var.app_sg_id]
   iam_instance_profile   = aws_iam_instance_profile.app_profile.name
 
-  # User data script to set up Docker and run the application
   user_data = base64encode(templatefile("${path.module}/user-data.sh", {
-    ecr_repository_url = var.ecr_repository_url
-    docker_image_tag   = var.docker_image_tag
-    database_url       = var.database_url
-    redis_url          = var.redis_url
-    aws_region         = data.aws_caller_identity.current.region
-    environment        = var.environment
+    ecr_repository_url          = var.ecr_repository_url
+    docker_image_tag            = var.docker_image_tag
+    postgres_password           = var.postgres_password
+    s3_bucket                   = var.s3_bucket
+    aws_region                  = data.aws_region.current.name
+    environment                 = var.environment
+    cognito_user_pool_id        = var.cognito_user_pool_id
+    cognito_app_client_id       = var.cognito_app_client_id
+    ses_notifications_topic_arn = var.ses_notifications_topic_arn
   }))
 
   associate_public_ip_address = true
@@ -143,8 +156,6 @@ resource "aws_eip" "app" {
 
   depends_on = [aws_instance.app]
 }
-
-data "aws_caller_identity" "current" {}
 
 output "instance_id" {
   value       = aws_instance.app.id

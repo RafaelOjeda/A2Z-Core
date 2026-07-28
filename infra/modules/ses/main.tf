@@ -1,14 +1,17 @@
 # SES plumbing for Core's email module (CLAUDE.md §8).
 #
 # Per-org/service configuration sets are created **lazily by Core** on first
-# send (cached in Redis), so Terraform does not enumerate them. What Terraform
-# owns is the shared, long-lived plumbing:
+# send (cached in-process -- see app/core/email.py, single-box MVP,
+# docs/architecture/single-box-mvp.md), so Terraform does not enumerate
+# them. What Terraform owns is the shared, long-lived plumbing:
 #   * the SNS topic SES publishes bounce/complaint notifications to
 #   * a topic policy allowing SES to publish
 #   * the org domain identity (verified once at org onboarding)
 #
-# The ses_notifications Lambda subscribes to this topic; Core attaches each new
-# config set's event destination to it when it creates the config set.
+# app/routers/ses_notifications.py (an HTTPS route, not a Lambda) subscribes
+# to this topic -- see infra/modules/ses-notifications-subscription. Core
+# attaches each new config set's event destination to it when it creates
+# the config set.
 
 variable "domain" {
   type        = string

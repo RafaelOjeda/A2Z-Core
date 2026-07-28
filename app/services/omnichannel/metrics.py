@@ -1,108 +1,63 @@
-"""CloudWatch custom metrics for the ``A2Z/OmniChannel`` namespace (§11).
+"""Metrics for Omni-Channel's hot paths (§11) -- structured logs, not CloudWatch.
 
-Observability at MVP is CloudWatch-only (⚠ ADAPTED: no Sentry, §7). Structured
-JSON logs via ``core.logging`` remain the primary trace; this module is
-strictly the *numeric* side -- the series the §11 alarms watch:
+Single-box MVP (docs/architecture/single-box-mvp.md): there is no CloudWatch
+agent shipping logs off this box and no alarms watching a numeric series, so
+a custom-metrics API namespace was pure cost with no consumer. Every
+``record_*`` call here now writes one structured JSON log line via
+``core.logging`` instead of a `PutMetricData` call -- same call sites, same
+function names (nothing above this module changes), same fields (channel
+type, latency, delta), just a different sink. If/when this needs to
+distribute again and something is actually watching these numbers,
+re-introduce a real metrics backend behind these same functions.
 
-  * ``WebhookAckLatencyMs``       per channel (alarm p99 > 2s -- Meta's retry
-                                  window is ~10s, §5.6)
-  * ``MessageProcessingLatencyMs`` receipt -> visible in inbox
-  * ``RoutingLatencyMs``          assignment decision time
-  * ``SendSuccessRate`` / ``SendFailureRate`` per channel (alarm failure > 5%)
-  * ``ActiveSSEStreams``          becomes ActiveAppSyncConnections at distribution
-
-**Metrics never break the flow they measure.** Every publish is best-effort:
-failures are logged and swallowed, never raised. A CloudWatch outage (or
-throttle) must not fail a customer's inbound message or an agent's reply --
-that trade is deliberate and is why these calls don't use the typed-error
-convention the rest of the service follows.
-
-Emission is fire-and-forget via ``asyncio`` background tasks so a PutMetricData
-round-trip never sits in the request/worker hot path. Rates are emitted as
-count-based success/failure series (1.0 per event) -- CloudWatch computes the
-actual rate at alarm time, which keeps the emit side stateless.
+**Metrics never break the flow they measure.** A logging failure (a broken
+handler, a misconfigured sink) must not fail a customer's inbound message or
+an agent's reply, so every ``record_*`` call is wrapped -- overkill for a
+plain ``logger.info`` today, but the invariant is worth keeping explicit
+rather than silently dropping it because the failure mode got less likely.
 """
 
 from __future__ import annotations
 
-import asyncio
-
-from app.core import clients
 from app.core.logging import get_logger
 
 log = get_logger("omnichannel.metrics")
 
-NAMESPACE = "A2Z/OmniChannel"
 
-# Background emit tasks, held so they aren't garbage-collected mid-flight
-# (asyncio only keeps weak references to tasks) and so tests can await them.
-_pending: set[asyncio.Task[None]] = set()
-
-
-async def _put(name: str, value: float, unit: str, dimensions: dict[str, str]) -> None:
-    """Publish one datum. Best-effort: never raises into the caller's flow."""
+def _emit(event: str, **fields: object) -> None:
     try:
-        await clients.run_aws(
-            clients.cloudwatch().put_metric_data,
-            Namespace=NAMESPACE,
-            MetricData=[
-                {
-                    "MetricName": name,
-                    "Value": value,
-                    "Unit": unit,
-                    "Dimensions": [{"Name": k, "Value": v} for k, v in dimensions.items()],
-                }
-            ],
-        )
+        log.info(event, extra=fields)
     except Exception as exc:  # noqa: BLE001 -- metrics must never break the flow
-        log.info("omnichannel.metric.failed", extra={"metric": name, "error": str(exc)})
-
-
-def _emit(name: str, value: float, unit: str, dimensions: dict[str, str]) -> None:
-    """Schedule a metric publish without awaiting the CloudWatch round-trip."""
-    try:
-        task = asyncio.create_task(_put(name, value, unit, dimensions))
-    except RuntimeError:
-        # No running loop (e.g. called from sync context) -- drop rather than
-        # raise; metrics are never worth breaking a caller over.
-        log.info("omnichannel.metric.no_loop", extra={"metric": name})
-        return
-    _pending.add(task)
-    task.add_done_callback(_pending.discard)
-
-
-async def drain() -> None:
-    """Await any in-flight metric publishes. For tests and worker shutdown."""
-    while _pending:
-        await asyncio.gather(*tuple(_pending), return_exceptions=True)
+        # Deliberately not re-using `log` here -- if logging itself is what
+        # failed, calling it again is how you get a crash loop instead of a
+        # dropped metric.
+        print(f"omnichannel.metric.failed event={event} error={exc}")  # noqa: T201
 
 
 def record_webhook_ack_latency(channel_type: str, elapsed_ms: float) -> None:
-    """Webhook receipt -> ack. Alarmed at p99 > 2s (§11)."""
-    _emit("WebhookAckLatencyMs", elapsed_ms, "Milliseconds", {"ChannelType": channel_type})
+    """Webhook receipt -> ack. Was alarmed at p99 > 2s (§11); now just logged."""
+    _emit("omnichannel.metric.webhook_ack_latency_ms", channel_type=channel_type, value=elapsed_ms)
 
 
 def record_message_processing_latency(channel_type: str, elapsed_ms: float) -> None:
     """Queue receipt -> message visible in the inbox (§11)."""
-    _emit("MessageProcessingLatencyMs", elapsed_ms, "Milliseconds", {"ChannelType": channel_type})
+    _emit(
+        "omnichannel.metric.message_processing_latency_ms",
+        channel_type=channel_type,
+        value=elapsed_ms,
+    )
 
 
 def record_routing_latency(elapsed_ms: float) -> None:
     """Time spent deciding/recording an assignment (§11)."""
-    _emit("RoutingLatencyMs", elapsed_ms, "Milliseconds", {})
+    _emit("omnichannel.metric.routing_latency_ms", value=elapsed_ms)
 
 
 def record_send_result(channel_type: str, *, success: bool) -> None:
-    """One outbound send outcome. Alarmed at failure rate > 5% (§11)."""
-    name = "SendSuccessRate" if success else "SendFailureRate"
-    _emit(name, 1.0, "Count", {"ChannelType": channel_type})
+    """One outbound send outcome. Was alarmed at failure rate > 5% (§11)."""
+    _emit("omnichannel.metric.send_result", channel_type=channel_type, success=success)
 
 
 def record_stream_delta(delta: int) -> None:
-    """+1 on SSE connect, -1 on disconnect (``ActiveSSEStreams``, §11).
-
-    A delta rather than a gauge: each API process only knows its own streams,
-    so the absolute count is CloudWatch's SUM across the fleet -- which stays
-    correct when this becomes ActiveAppSyncConnections at distribution.
-    """
-    _emit("ActiveSSEStreams", float(delta), "Count", {})
+    """+1 on SSE connect, -1 on disconnect (was ``ActiveSSEStreams``, §11)."""
+    _emit("omnichannel.metric.stream_delta", value=delta)

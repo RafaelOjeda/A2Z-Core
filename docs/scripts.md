@@ -57,29 +57,15 @@ Exits non-zero and prints each problem on failure. Runs as the `docs` job
 in [CI](ci-cd.md#docs); run it locally after adding, moving, or renaming any
 doc.
 
-## `scripts/build_lambda.sh`
+## No Lambda packaging script anymore
 
-Builds `dist/lambda.zip` — one artifact serving **both** out-of-band
-handlers (`app.lambdas.cognito_post_confirm.handler`,
-`app.lambdas.ses_notifications.handler`):
-
-```bash
-bash scripts/build_lambda.sh
-```
-
-- Installs the package's runtime dependencies (no dev extras) into a clean
-  `build/lambda/` directory via `pip install --target`.
-- Strips `boto3`/`botocore` from the bundle — the Lambda Python 3.12
-  runtime already provides them, so shipping them would only bloat the zip.
-- Zips the result to `dist/lambda.zip`, consumed by
-  `infra/modules/cognito`'s `aws_lambda_function` resources via
-  `filename` + `source_code_hash`.
-- Override the Python interpreter with `PYTHON=python3.x` if needed — it
-  **must** match the Lambda runtime version (`python3.12`).
-
-Run this before any `terragrunt apply` of the `cognito` module — the
-Terragrunt composition (`infra/live/prod/cognito/terragrunt.hcl`) points
-`lambda_zip_path` at `dist/lambda.zip` directly.
+`scripts/build_lambda.sh` and `app/lambdas/` are deleted. Both former
+out-of-band handlers moved in-process (single-box MVP —
+[single-box-mvp.md](architecture/single-box-mvp.md)):
+`cognito_post_confirm` → `app/dependencies.py::current_user`;
+`ses_notifications` → `app/routers/ses_notifications.py`. Neither needs a
+separate build/package step — they ship as part of the one application
+image.
 
 ## `infra/migrations/`
 
@@ -90,9 +76,10 @@ the rules and the one example script's shape.
 ## Docker
 
 ```bash
-docker build -t a2z-core .            # the one monolith image (web; worker = same image + cmd override)
-docker compose up -d                  # LocalStack + Redis + Postgres for local dev/tests
+docker build -t a2z-core .            # the one monolith image -- app + Omni-Channel worker
+                                       # (lifespan task, RUN_OMNICHANNEL_WORKER), one process
+docker compose up -d                  # LocalStack + Postgres for local dev/tests -- no Redis
 ```
 
-See [deployment architecture](architecture/deployment.md) for what runs
-where in each of the two deployment shapes this repo describes.
+See [deployment architecture](architecture/deployment.md) for the
+single-box deployment shape and what runs where.

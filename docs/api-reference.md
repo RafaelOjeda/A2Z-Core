@@ -3,16 +3,19 @@
 > Part of the [documentation index](README.md). See also: [request lifecycle](architecture/request-lifecycle.md), [Omni-Channel API reference](services/omnichannel/api-reference.md).
 > **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
-`app/main.py` mounts four routers. All are **thin** — they parse the
+`app/main.py` mounts six routers (`landing`, `health`, `ses_notifications`,
+`core_admin`, `omnichannel`, `invoicing`). All are **thin** — they parse the
 request and call into `core`/service code (`CLAUDE.md` §2); no business
 logic lives in a router.
 
 ## Versioning
 
-Every router except `health` is mounted under **`/v1`** (`app/main.py`,
-API review 2026-07-18). `/health` stays unversioned — it's an infra
-liveness probe (ECS target group, Docker `HEALTHCHECK`), not a
+Every router except `health`, `landing`, and `ses_notifications` is mounted
+under **`/v1`** (`app/main.py`, API review 2026-07-18). `/health` stays
+unversioned — it's an infra liveness probe (Docker `HEALTHCHECK`), not a
 client-facing contract, and shouldn't need updating on a version bump.
+`ses_notifications` is an SNS webhook target, not a client API, so it's
+unversioned for the same reason.
 
 **Policy:** additive changes (new optional fields, new endpoints, new
 query params) land in place under `/v1`. A change that breaks an existing
@@ -25,7 +28,13 @@ constraint anything is currently up against.
 
 | Route | Method | Notes |
 |---|---|---|
-| `/health` | GET | Pings DynamoDB (`ListTables`) and Redis (`PING`). `200` if both succeed, else `503`. This is what the ECS target group and Docker `HEALTHCHECK` probe |
+| `/health` | GET | Pings DynamoDB (`ListTables`) and Postgres (`SELECT 1`, via Omni-Channel's engine). `200` if both succeed, else `503`. This is what the Docker `HEALTHCHECK` probes — there is no load-balancer target group anymore (single-box MVP, see [single-box-mvp.md](architecture/single-box-mvp.md)) |
+
+## `routers/ses_notifications.py` — no auth (SNS-signature-verified), unversioned
+
+| Route | Method | Notes |
+|---|---|---|
+| `/webhooks/ses-notifications` | POST | SNS delivers bounce/complaint notifications here directly (no Lambda — see [single-box-mvp.md](architecture/single-box-mvp.md)). Every request's SNS signature is verified before any payload is trusted; an invalid signature is `403`. Handles `SubscriptionConfirmation`, `Notification`, and `UnsubscribeConfirmation` message types |
 
 ## `routers/core_admin.py` — prefix `/v1/core`, requires `Authorization: Bearer <jwt>`
 

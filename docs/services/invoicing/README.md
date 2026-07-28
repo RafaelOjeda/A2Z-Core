@@ -149,7 +149,7 @@ See [API Reference](api-reference.md#error-responses) for details.
 
 - **Unit tests** — state machine transitions (14 tests), calculations, status inference
 - **Integration tests** — create/read/update/list/void/payment flows, cross-org isolation (24+ tests)
-- All tests run against a real Postgres instance (via `pg_session` fixture) and moto/fakeredis for AWS/Redis
+- All tests run against a real Postgres instance (via `pg_session` fixture) and moto for AWS -- no Redis anywhere (see [single-box-mvp.md](../../architecture/single-box-mvp.md))
 
 Run tests:
 

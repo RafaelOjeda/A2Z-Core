@@ -19,9 +19,10 @@ flowchart LR
         L3["mypy app scripts"]
     end
     subgraph Test["test (postgres service container)"]
-        T1["pytest -m 'not load' --cov=app/core --cov=app/services/omnichannel"]
+        T1["pytest -m 'not load' --cov=app/core --cov=app/services/omnichannel --cov=app/services/invoicing"]
         T2["coverage gate: app/core >= 90%"]
         T3["coverage gate: app/services/omnichannel >= 90%"]
+        T3b["coverage gate: app/services/invoicing >= 90%"]
         T4["pytest -m load (continue-on-error)"]
     end
     subgraph Docker["docker"]
@@ -49,19 +50,20 @@ this passing — it's also a dependency of the `docker` job.
 ### `test`
 
 Runs with a real `postgres:16-alpine` service container (the **one**
-exception to the moto/fakeredis-only test posture — see
+exception to the moto-only test posture — see
 [testing](testing.md#how-the-suite-runs-without-any-real-aws)) because
-Omni-Channel's Postgres layer has no in-process emulator. Everything else
-(DynamoDB, S3, SES, SNS, EventBridge, Secrets Manager, SQS, CloudWatch,
-Redis) is mocked in-process via moto/fakeredis — no other service
-containers needed.
+Omni-Channel/Invoicing's Postgres layer has no in-process emulator.
+Everything else (DynamoDB, S3, SES, SNS, EventBridge, Secrets Manager, SQS)
+is mocked in-process via moto — no other service containers needed, and no
+Redis to mock at all (single-box MVP,
+[single-box-mvp.md](architecture/single-box-mvp.md)).
 
-Two independent coverage gates read from the **same** coverage run
-(`app/core` and `app/services/omnichannel`, each ≥90%) — deliberately
-separate reports so a dip in one package can't hide behind a healthy
-number in the other. The load-test step is `continue-on-error: true`:
-advisory, not a merge blocker, since absolute latency numbers are jittery
-on shared runners.
+Three independent coverage gates read from the **same** coverage run
+(`app/core`, `app/services/omnichannel`, `app/services/invoicing`, each
+≥90%) — deliberately separate reports so a dip in one package can't hide
+behind a healthy number in the others. The load-test step is
+`continue-on-error: true`: advisory, not a merge blocker, since absolute
+latency numbers are jittery on shared runners.
 
 ### `docker`
 
@@ -94,13 +96,13 @@ real apply — see [`infra/README.md`](../infra/README.md)).
 ## What CI does **not** do
 
 - **No deploy step.** CI validates and builds; it does not `terragrunt
-  apply`, push a Docker image to ECR, or update any running ECS
-  service/EC2 instance. Deployment is a manual, deliberate action (see
+  apply`, push a Docker image to ECR, or update the running EC2 instance.
+  Deployment is a manual, deliberate action (see
   [deployment architecture](architecture/deployment.md) and
   [`infra/README.md`](../infra/README.md)).
-- **No Lambda packaging check.** `scripts/build_lambda.sh` (producing
-  `dist/lambda.zip`) is not run in CI — it's invoked manually before a
-  Cognito module apply.
+- **No Lambda packaging check** — there are no Lambdas anymore. Both former
+  out-of-band handlers moved in-process; see
+  [single-box-mvp.md](architecture/single-box-mvp.md).
 
 ## Local reproduction
 
@@ -108,8 +110,8 @@ real apply — see [`infra/README.md`](../infra/README.md)).
 pip install -e ".[dev]"
 ruff check app tests scripts && ruff format --check app tests scripts && mypy app scripts
 python -m scripts.check_docs  # broken links + INDEX.md registration
-docker compose up -d          # postgres, redis, localstack (for manual/integration runs)
-pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov-report=term-missing
+docker compose up -d          # postgres, localstack (for manual/integration runs)
+pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov=app/services/invoicing --cov-report=term-missing
 docker build -t a2z-core:local .
 terraform fmt -check -recursive infra/
 ```

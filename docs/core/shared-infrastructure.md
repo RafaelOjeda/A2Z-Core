@@ -8,25 +8,25 @@ the plumbing every module in [`docs/core/README.md`](README.md) is built on.
 
 ## `app/core/clients.py` — the only place clients are constructed
 
-**Purpose**: one module builds every boto3, Redis, and httpx client as a
+**Purpose**: one module builds every boto3 and httpx client as a
 module-level singleton, so no Core function ever pays client-construction
 cost on a hot path, and so LocalStack/test overrides have exactly one place
-to intercept.
+to intercept. There is no Redis client to build — see
+[single-box-mvp.md](../architecture/single-box-mvp.md) for what replaced it
+(`core.realtime`, `core.rate_limit`, `core.cache`, all in-process).
 
 **Public surface**:
 
 | Function | Returns |
 |---|---|
-| `dynamodb()`, `s3()`, `ses()`, `sns()`, `eventbridge()`, `secretsmanager()`, `cloudwatch()`, `sqs()` | `@lru_cache(maxsize=1)` boto3 clients, region/endpoint from `Settings`, bounded retries (`max_attempts=3`, `connect_timeout=3s`, `read_timeout=5s`) |
-| `redis_client()` | Shared `redis.asyncio` client, `decode_responses=True` |
-| `boto3_session()` | Shared `boto3.Session` (used by `core.realtime`'s future AppSync SigV4 signing) |
-| `appsync_http_client()`, `http_client()` | Shared `httpx.AsyncClient`s (AppSync calls; outbound calls to channel providers e.g. WhatsApp Graph API) |
+| `dynamodb()`, `s3()`, `ses()`, `sns()`, `eventbridge()`, `secretsmanager()`, `sqs()` | `@lru_cache(maxsize=1)` boto3 clients, region/endpoint from `Settings`, bounded retries (`max_attempts=3`, `connect_timeout=3s`, `read_timeout=5s`) |
+| `http_client()` | Shared `httpx.AsyncClient` (outbound calls to channel providers e.g. WhatsApp Graph API, and the SES-notifications route's SNS cert/subscribe-confirm fetches) |
 | `run_aws(fn, *args, **kwargs)` | `await`s a sync boto3 call via `asyncio.to_thread` — **every** sync AWS call in Core goes through this |
 | `reset_clients()` | Clears every `lru_cache`d factory — used by tests between runs |
 
 **Configuration**: `AWS_ENDPOINT_URL` (empty = real AWS, set = LocalStack);
-credentials come from the ECS task IAM role in AWS, or dummy `test`/`testing`
-values locally (`.env.example`, `tests/conftest.py`).
+credentials come from the EC2 instance's IAM role in AWS, or dummy
+`test`/`testing` values locally (`.env.example`, `tests/conftest.py`).
 
 **Extension point**: adding a new AWS service client means adding one
 `@lru_cache` factory function here — never construct a client inline in a

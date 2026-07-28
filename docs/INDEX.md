@@ -42,9 +42,10 @@ description of current code.
 | [overview.md](architecture/overview.md) | System components, layer responsibilities, why a monolith | ref |
 | [request-lifecycle.md](architecture/request-lifecycle.md) | HTTP → router → Core → response; error-mapping convention | ref |
 | [auth-and-authorization.md](architecture/auth-and-authorization.md) | JWT validation, Cognito signup flow, role model, role-vocabulary gap | ref |
-| [data-flow.md](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Redis/Secrets Manager; per-store org-scoping | ref |
-| [event-driven-architecture.md](architecture/event-driven-architecture.md) | EventBridge vs. Redis pub/sub — two mechanisms, when to use which | ref |
-| [deployment.md](architecture/deployment.md) | ECS Fargate control plane vs. Omni-Channel single-EC2 MVP; codified vs. planned | ref |
+| [data-flow.md](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Secrets Manager (and what's in-process now); per-store org-scoping | ref |
+| [event-driven-architecture.md](architecture/event-driven-architecture.md) | EventBridge vs. the in-process realtime broker — two mechanisms, when to use which | ref |
+| [deployment.md](architecture/deployment.md) | Single-box EC2 deployment shape; codified vs. planned | ref |
+| [single-box-mvp.md](architecture/single-box-mvp.md) | What moved in-process when Redis/ECS/RDS were removed, and the single-process constraint that creates | ref |
 | [microservices-distribution.md](architecture/microservices-distribution.md) | Forward-looking plan to split the monolith: triggers, phases, Core-as-SDK | record |
 
 ## Core platform layer (`docs/core/` → `app/core/`)
@@ -52,17 +53,17 @@ description of current code.
 | Doc | Module | Backing store |
 |---|---|---|
 | [core/README.md](core/README.md) | Module index + dependency graph + "extending Core" protocol | — |
-| [auth.md](core/auth.md) | `auth` — JWT validation, claims, test-token factory | Cognito JWKS (Redis-cached) |
+| [auth.md](core/auth.md) | `auth` — JWT validation, claims, test-token factory | Cognito JWKS (in-process cached) |
 | [membership.md](core/membership.md) | `membership` — user/org/role CRUD + queries | DynamoDB `a2z-core-membership` |
 | [audit.md](core/audit.md) | `audit` — append-only event log + query | DynamoDB `a2z-core-audit` |
-| [settings.md](core/settings.md) | `settings` — org config, cached reads, invoice counter | DynamoDB `a2z-core-settings` + Redis |
-| [rate-limit.md](core/rate-limit.md) | `rate_limit` — sliding-window limiter | Redis |
+| [settings.md](core/settings.md) | `settings` — org config, invoice counter | DynamoDB `a2z-core-settings` |
+| [rate-limit.md](core/rate-limit.md) | `rate_limit` — sliding-window limiter | In-process (single-box MVP) |
 | [events-module.md](core/events-module.md) | `events` — cross-service publish | EventBridge `a2z-bus` |
 | [storage.md](core/storage.md) | `storage` — S3 up/down, signed URLs, metadata | S3 + DynamoDB `files` |
 | [email.md](core/email.md) | `email` — SES send, suppression, status, **domain verification** | SES + DynamoDB `email-events`/`suppression` |
-| [secrets.md](core/secrets.md) | `secrets` — per-org/service credentials, **get + put** | Secrets Manager + Redis |
-| [realtime.md](core/realtime.md) | `realtime` — fan-out to connected clients | Redis pub/sub |
-| [shared-infrastructure.md](core/shared-infrastructure.md) | `clients`, `logging`, `exceptions`, `_ddb`, `config` | — |
+| [secrets.md](core/secrets.md) | `secrets` — per-org/service credentials, **get + put** | Secrets Manager + in-process cache |
+| [realtime.md](core/realtime.md) | `realtime` — fan-out to connected clients | In-process broker (single-box MVP) |
+| [shared-infrastructure.md](core/shared-infrastructure.md) | `clients`, `logging`, `exceptions`, `_ddb`, `config`, `cache` | — |
 
 ## Omni-Channel service (`docs/services/omnichannel/` → `app/services/omnichannel/`)
 
@@ -72,7 +73,7 @@ description of current code.
 | [data-model.md](services/omnichannel/data-model.md) | Postgres tables, conversation/message model |
 | [adapters.md](services/omnichannel/adapters.md) | Email/SMS/WhatsApp channel adapters + registry |
 | [message-flow.md](services/omnichannel/message-flow.md) | Inbound webhook → routing → inbox → send path |
-| [routing-and-realtime.md](services/omnichannel/routing-and-realtime.md) | Assignment/routing rules + SSE stream/presence |
+| [routing-and-realtime.md](services/omnichannel/routing-and-realtime.md) | Assignment/routing rules + SSE stream (presence: deferred, deleted) |
 | [api-reference.md](services/omnichannel/api-reference.md) | Every `/v1/omnichannel/*` route |
 | **[known-issues.md](services/omnichannel/known-issues.md)** | **Documented drift between the design doc and the implementation — read regardless of task** |
 
@@ -91,9 +92,9 @@ description of current code.
 |---|---|---|
 | [api-reference.md](api-reference.md) | Full HTTP surface: health, core admin, versioning, error shape | ref |
 | [configuration.md](configuration.md) | Every environment variable + config registry | ref |
-| [testing.md](testing.md) | Test layout, moto/fakeredis harness, coverage gates, cross-org isolation | ref |
+| [testing.md](testing.md) | Test layout, the moto harness, coverage gates, cross-org isolation | ref |
 | [ci-cd.md](ci-cd.md) | GitHub Actions pipeline, job by job | ref |
-| [scripts.md](scripts.md) | `create_local_resources.py`, `build_lambda.sh`, Docker, migration scripts | ref |
+| [scripts.md](scripts.md) | `create_local_resources.py`, Docker, migration scripts | ref |
 | [migrations.md](migrations.md) | DynamoDB additive-change rules vs. Alembic for Postgres | spec |
 | [events.md](events.md) | Current EventBridge event catalog (wire contract) | spec |
 | [zero-trust.md](zero-trust.md) | Zero Trust API policy: per-request verification, endpoint classes, checklist | spec |

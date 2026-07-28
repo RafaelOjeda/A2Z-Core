@@ -1,56 +1,55 @@
 # `core.rate_limit` — Sliding-Window Rate Limiting
 
-> Part of the [Core module reference](README.md). Source: [`app/core/rate_limit.py`](../../app/core/rate_limit.py).
+> Part of the [Core module reference](README.md). Source: [`app/core/rate_limit.py`](../../app/core/rate_limit.py). See also: [single-box-mvp.md](../architecture/single-box-mvp.md).
 > **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## Purpose & responsibilities
 
-A general-purpose, per-org (or per-org-per-action) rate limiter backed by
-Redis. Originally built to enforce email's "50/hour/org" limit, but
-deliberately generic — any action can register a limit in
-`app.config.RATE_LIMITS` and call this module.
+A general-purpose, per-org (or per-org-per-action) rate limiter. Originally
+built to enforce email's "50/hour/org" limit, but deliberately generic — any
+action can register a limit in `app.config.RATE_LIMITS` and call this
+module.
 
 ## Internal architecture
 
-A Redis **sorted set** per `{org_id, action}`, one member per recent
-request, scored by timestamp in milliseconds:
+Single-box MVP ([single-box-mvp.md](../architecture/single-box-mvp.md)):
+an in-process `dict[tuple[str, str], deque[float]]`, one `deque` of
+monotonic timestamps per `{org_id, action}` — no Redis, no network hop.
+This is only correct because there is exactly one process ever running
+this code; see that doc's "Single-process is load-bearing" section.
 
 ```mermaid
 sequenceDiagram
     participant Caller
     participant RL as core.rate_limit
-    participant Redis
 
     Caller->>RL: check_and_increment(org_id, action, limit=50, window_seconds=3600)
-    RL->>Redis: MULTI pipeline:
-    RL->>Redis: ZREMRANGEBYSCORE key 0 (now - window)
-    RL->>Redis: ZADD key {now_ms}:{uuid} now_ms
-    RL->>Redis: ZCARD key
-    RL->>Redis: EXPIRE key window_seconds
-    Redis-->>RL: EXEC results
-    alt count > limit
-        RL->>Redis: ZREM key {now_ms}:{uuid}  (roll back our own add)
-        RL->>Redis: ZRANGE key 0 0 WITHSCORES (find oldest, compute retry_after)
+    RL->>RL: now = time.monotonic()
+    RL->>RL: evict entries <= now - window_seconds from the deque
+    alt len(deque) >= limit
+        RL->>RL: retry_after = ceil(oldest_entry + window_seconds - now)
         RL-->>Caller: raise RateLimitError(retry_after=N)
-    else count <= limit
+    else under limit
+        RL->>RL: deque.append(now)
         RL-->>Caller: return (request recorded)
     end
 ```
 
-The "add then check, roll back on over-limit" approach keeps the whole
-operation atomic enough (via a Redis pipeline in `transaction=True` mode)
-without a Lua script — deliberately, so it also runs correctly against
-**fakeredis** in tests, which doesn't support custom Lua scripts as
-faithfully as a real Redis server.
+There is no "add optimistically, then roll back on overflow" dance here —
+that existed only to make the read+write atomic across a Redis pipeline
+network hop. On a single event loop with no `await` in the critical
+section, checking the limit before recording is sufficient; there's
+nothing to roll back.
 
 ## Public API
 
 | Function | Signature | Notes |
 |---|---|---|
-| `check_and_increment` | `(org_id, action, *, limit: int, window_seconds: int) -> None` | Raises `RateLimitError` if over limit; otherwise returns and the request is recorded. < 10ms target |
+| `check_and_increment` | `(org_id, action, *, limit: int, window_seconds: int) -> None` | Raises `RateLimitError` if over limit; otherwise returns and the request is recorded. < 10ms target (in practice, microseconds — no I/O) |
 | `limits_for` | `(action: str) -> tuple[int, int]` | Looks up `(limit, window_seconds)` from `app.config.RATE_LIMITS`; raises `KeyError` if unregistered |
+| `reset` | `() -> None` | Clears all in-process state. Tests only (`tests/conftest.py`'s autouse `_reset_core_state` fixture) |
 
-Key format: `ratelimit:{org_id}:{action}`.
+State key: `(org_id, action)` tuple — no string formatting, no key prefix.
 
 ## Configuration
 
@@ -76,14 +75,16 @@ same registry).
 
 ## Dependencies
 
-`core.clients` (`redis_client()`), `core.exceptions` (`RateLimitError`).
-No dependency on any other Core business-logic module.
+`app.config` (`RATE_LIMITS`), `core.exceptions` (`RateLimitError`). No
+dependency on any other Core business-logic module, and — deliberately —
+none on `core.clients` anymore; there's no client to build.
 
 ## Data model
 
-No persisted model — state lives entirely in the Redis sorted set, which
-self-expires (`EXPIRE key window_seconds` on every call) if a key goes
-idle.
+No persisted model — state lives entirely in the in-process `dict`, pruned
+lazily (a key's deque is deleted once it empties on a subsequent call, so
+memory doesn't grow unbounded across every org/action pair that was ever
+touched once).
 
 ## Error handling
 
@@ -100,11 +101,11 @@ why that's deliberate. The FastAPI exception handler
 
 ## Security considerations
 
-- **Org-scoped by construction** — the Redis key always includes `org_id`;
+- **Org-scoped by construction** — the state key always includes `org_id`;
   one org's traffic can never exhaust another org's quota.
 - The sliding window (not a fixed bucket) means a burst right at a window
   boundary can't double the effective rate — old entries age out
-  continuously via `ZREMRANGEBYSCORE`, not in one reset step.
+  continuously on every call, not in one reset step.
 
 ## Example usage
 
@@ -123,9 +124,14 @@ Adding a new rate-limited action is a one-line registry addition in
 
 ## Known limitations
 
-- Per-process retry math (`_retry_after`) reads the same Redis key it just
-  wrote to, so it's consistent across processes, but the sorted-set
-  approach means very high-cardinality actions (many distinct
-  `{org_id, action}` pairs, each with its own key) create one Redis key
-  per pair — acceptable at current scale, worth knowing before using this
-  for something with millions of distinct scopes.
+- **Single-process only** — see
+  [single-box-mvp.md](../architecture/single-box-mvp.md). Running more than
+  one process (`--workers 2`, or a separate worker process) would give each
+  its own budget per `{org_id, action}`, silently doubling every configured
+  limit, including provider pair-rate ceilings like
+  `omnichannel.whatsapp.send`. Do not add a second process without
+  revisiting this module first.
+- High-cardinality actions (many distinct `{org_id, action}` pairs) each
+  hold their own `deque` in memory for as long as they're active —
+  acceptable at current scale, worth knowing before using this for
+  something with millions of distinct scopes.

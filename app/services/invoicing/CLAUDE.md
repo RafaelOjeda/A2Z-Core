@@ -364,8 +364,8 @@ thread `request_id` (root §4) and never log full email bodies or PII beyond nee
 
 ## 11. Testing & cross-org isolation
 
-Mirror Core's bar and Omni-Channel's harness (moto + fakeredis + a Postgres test
-DB): unit tests for the state machine (one per legal **and** illegal transition),
+Mirror Core's bar and Omni-Channel's harness (moto + a Postgres test
+DB -- no Redis anywhere, see `docs/architecture/single-box-mvp.md`): unit tests for the state machine (one per legal **and** illegal transition),
 integration tests for each endpoint end to end, and a **cross-org isolation** test
 per module proving a user in Org A cannot list, read, edit, send, pay, or
 soft-delete Org B's invoices, and that Org A payments never touch Org B totals.

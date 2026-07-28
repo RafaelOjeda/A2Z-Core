@@ -7,9 +7,11 @@
 
 A2Z Core is **not a microservice**. It is a set of in-process Python packages
 (`app/core/`) imported by services inside a single FastAPI **modular
-monolith**. One process (plus a worker process for Omni-Channel) serves every
-A2Z product. There is no network hop between a service and Core — a "call to
-Core" is a Python function call.
+monolith**. **One process** serves every A2Z product — including
+Omni-Channel's SQS-draining worker, which runs as a FastAPI lifespan
+background task inside this same process rather than a separate one (see
+[single-box-mvp.md](single-box-mvp.md)). There is no network hop between a
+service and Core — a "call to Core" is a Python function call.
 
 Two things exist in this repository today:
 
@@ -50,36 +52,39 @@ flowchart TB
         SES_IN["Inbound email (SES receipt rule)"]
     end
 
-    subgraph Monolith["A2Z modular monolith (ECS Fargate / single EC2)"]
+    subgraph Monolith["A2Z modular monolith (one EC2 instance, one process)"]
         direction TB
-        FastAPI["FastAPI app (app/main.py)"]
+        FastAPI["FastAPI app (app/main.py)\nlifespan starts the Omni-Channel worker\nas a background task, RUN_OMNICHANNEL_WORKER=true"]
         subgraph Routers["Thin HTTP routers"]
             HealthR["routers/health.py"]
             CoreAdminR["routers/core_admin.py"]
             OmniR["routers/omnichannel.py"]
+            SesNotifR["routers/ses_notifications.py\n(SNS signature-verified webhook)"]
         end
         subgraph Core["app/core/* (platform layer)"]
             Auth["auth.py"]
             Membership["membership.py"]
             Audit["audit.py"]
             Settings["settings.py"]
-            RateLimit["rate_limit.py"]
+            RateLimit["rate_limit.py (in-process)"]
             Events["events.py"]
             Storage["storage.py"]
             Email["email.py"]
             Secrets["secrets.py"]
-            Realtime["realtime.py"]
-            Clients["clients.py (boto3/redis/httpx singletons)"]
+            Realtime["realtime.py (in-process broker)"]
+            Cache["cache.py (in-process TTL cache)"]
+            Clients["clients.py (boto3/httpx singletons)"]
         end
         subgraph OmniService["app/services/omnichannel/*"]
             Handlers["handlers.py / routing.py / inbox.py"]
             Webhooks["webhooks.py"]
-            Worker["worker.py (separate process)"]
+            Worker["worker.py (lifespan task,\nsame process as FastAPI)"]
             Adapters["adapters/ (email, whatsapp, sms)"]
         end
         FastAPI --> Routers
         CoreAdminR --> Core
         OmniR --> OmniService
+        SesNotifR --> Email
         OmniService --> Core
         Worker --> Core
         Worker --> OmniService
@@ -96,14 +101,8 @@ flowchart TB
         Cognito["Cognito User Pool"]
     end
 
-    subgraph DataPlaneOther["Non-AWS backing stores"]
-        Redis[("Redis\ncache, rate limits, pub/sub, presence")]
-        Postgres[("Postgres\nomnichannel schema")]
-    end
-
-    subgraph Lambdas["Out-of-band Lambdas"]
-        PostConfirm["cognito_post_confirm.py"]
-        SesNotif["ses_notifications.py"]
+    subgraph DataPlaneOther["Non-AWS backing store"]
+        Postgres[("Postgres container\nomnichannel + invoicing schemas")]
     end
 
     Browser -->|HTTPS + Bearer JWT| FastAPI
@@ -117,15 +116,15 @@ flowchart TB
     Clients --> EB
     Clients --> SM
     Clients --> SQS
-    Clients --> Redis
     OmniService --> Postgres
 
-    Cognito -->|Post Confirmation trigger| PostConfirm
-    PostConfirm --> Membership
-    SES -->|Bounce/Complaint via SNS| SNSsvc --> SesNotif
-    SesNotif --> Email
+    SES -->|Bounce/Complaint via SNS HTTPS subscription| SNSsvc --> SesNotifR
     Auth -->|JWKS fetch, 24h cache| Cognito
 ```
+
+There is no Cognito post-confirm Lambda anymore — `app/dependencies.py`'s
+`current_user` provisions the Core user row on the first authenticated
+request instead (see [single-box-mvp.md](single-box-mvp.md)).
 
 ## Layer responsibilities
 
@@ -134,8 +133,13 @@ flowchart TB
 | Routers | `app/routers/*.py` | Parse HTTP request, call `core`/service, map typed errors to responses | Business logic, direct AWS calls |
 | Core | `app/core/*.py` | Org-scoped platform primitives: auth, tenancy, storage, email, audit, settings, events, rate limiting, secrets, realtime | Import from `app/services/*` |
 | Service (Omni-Channel) | `app/services/omnichannel/*.py` | Product domain logic: conversations, routing, channel adapters | Import another service's code directly (events only) |
-| Lambdas | `app/lambdas/*.py` | Out-of-band AWS-triggered handlers (Cognito, SES/SNS) that must never block on Core | Long-running work — they call one Core function and return |
-| Worker | `app/services/omnichannel/worker.py` | Long-running SQS consumer process (same container image, different entrypoint) | Serve HTTP |
+| Worker | `app/services/omnichannel/worker.py::run_forever` | SQS-draining loop, run as a FastAPI lifespan background task in the same process (`RUN_OMNICHANNEL_WORKER`) | Run as a second process — see [single-box-mvp.md](single-box-mvp.md) for why that would break both `core.realtime` and `core.rate_limit` |
+
+There are no out-of-band Lambdas anymore. The Cognito post-confirm job moved
+into `app/dependencies.py::current_user`; the SES notifications handler
+moved into `app/routers/ses_notifications.py` (an HTTPS route SNS calls
+directly, with its own signature verification since it no longer has an
+IAM-invoke boundary). See [single-box-mvp.md](single-box-mvp.md).
 
 ## Why a monolith, not microservices
 
@@ -157,10 +161,9 @@ app/
 ├── services/
 │   ├── omnichannel/ # see docs/services/omnichannel/README.md
 │   └── invoicing/   # v1 built — see app/services/invoicing/CLAUDE.md
-├── routers/         # thin HTTP layer
-└── lambdas/         # Cognito + SES/SNS out-of-band handlers
+└── routers/         # thin HTTP layer, incl. ses_notifications.py (no Lambda)
 infra/               # Terragrunt/Terraform — see infra/README.md
-scripts/             # local provisioning + Lambda packaging
+scripts/             # local provisioning (create_local_resources.py, check_docs.py)
 tests/               # unit / integration / load — see docs/testing.md
 docs/                # this documentation tree
 ```

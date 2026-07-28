@@ -40,41 +40,45 @@ flowchart TD
 
 ## Authentication flow (Cognito signup → first request)
 
+Single-box MVP ([single-box-mvp.md](single-box-mvp.md)): there is no
+Cognito post-confirm Lambda anymore. User-row provisioning moved into
+`app/dependencies.py::current_user`, which now runs on every authenticated
+request — CLAUDE.md §5 already preferred "first authenticated request"
+over the Lambda for org bootstrap; this just extends the same reasoning to
+bare user-row creation, since there's no Lambda left to prefer it *over*.
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User
     participant Cognito as Cognito User Pool
-    participant PC as lambdas/cognito_post_confirm.py
-    participant Mem as core.membership
     participant App as A2Z API
+    participant Mem as core.membership
 
     U->>Cognito: Sign up + confirm
-    Cognito->>PC: Post Confirmation trigger (sub, email)
-    PC->>Mem: create_user_if_not_exists(sub, email)
-    Note over PC: Never blocks signup on failure --\nlogs + emits a metric, returns the event regardless
-    PC-->>Cognito: event (signup completes)
-
     U->>Cognito: Sign in
     Cognito-->>U: ID token (RS256, iss = this pool)
 
     U->>App: Any request, Authorization: Bearer <id token>
-    App->>App: core.auth.validate_jwt() -- RS256 path
-    Note over App: First-login org bootstrap (create a default org +\nowner membership) happens HERE, not in the Lambda --\nkeeps the Lambda minimal and signup fast (CLAUDE.md §5)
+    App->>App: core.auth.validate_jwt() -- RS256 path (via current_user)
+    App->>Mem: create_user_if_not_exists(sub, email)
+    Note over App: Skipped after the first success per sub,\nvia an in-process "already provisioned" set
+    Note over App: First-login org bootstrap (create a default org +\nowner membership) still happens HERE too --\nnot yet wired to a specific router (CLAUDE.md §5)
 ```
 
-Two deliberate decisions, both recorded in `CLAUDE.md` §5 and enforced by
-the code:
+The old Lambda's two properties both still hold, just implemented
+differently:
 
-1. **The Lambda never blocks signup.** `cognito_post_confirm.handler`
-   wraps `create_user_if_not_exists` in a `try/except Exception` and always
-   returns the event so Cognito completes signup even if Core is down. A
-   reconciliation job (not yet built) is the intended backfill path for any
-   row that got missed.
-2. **Org bootstrap happens on first authenticated request, not in the
-   Lambda.** The Lambda only creates the bare user row
-   (`create_user_if_not_exists`); creating a default org and OWNER
-   membership is left to application code the first time that user hits an
+1. **Provisioning never blocks the request that triggers it in a way that
+   loses data on failure** — `current_user` still calls
+   `create_user_if_not_exists`, which is a conditional DynamoDB write
+   (idempotent). Unlike the Lambda, a failure here *does* propagate to the
+   request (there's no separate "signup" step to protect), but the write
+   itself is safe to retry on the very next authenticated request.
+2. **Org bootstrap happens on first authenticated request** — this was
+   already true before the Lambda was removed; only the bare user-row
+   creation moved to join it. Creating a default org and OWNER membership
+   is still left to application code the first time that user hits an
    authenticated endpoint (not yet wired to a specific router — a
    deliberate, documented gap, not an oversight).
 
@@ -153,7 +157,9 @@ flowchart TD
   only at startup, so it holds even if `A2Z_ENV` changes at runtime in a
   long-lived process.
 - **JWKS caching is in-process, not shared.** A 24h TTL is a deliberate
-  trade (Cognito rotates signing keys rarely; avoids a second sync Redis
-  client on the hot auth path) — see `core/auth.md` for the full rationale
-  and its implication (each process instance re-fetches once per 24h,
-  independently).
+  trade (Cognito rotates signing keys rarely; keeps the hot auth path free
+  of a network hop) — see `core/auth.md` for the full rationale and its
+  implication (each process instance re-fetches once per 24h,
+  independently). Moot on the current single-box deployment regardless,
+  since there is only one process — see
+  [single-box-mvp.md](single-box-mvp.md).

@@ -8,11 +8,11 @@ serve different purposes. Confusing them is a documented footgun
 (`docs/events.md`), so this page draws the line explicitly before diving into
 either.
 
-| | EventBridge (`core.events.publish_event`) | Redis pub/sub (`core.realtime.publish_update`) |
+| | EventBridge (`core.events.publish_event`) | In-process broker (`core.realtime.publish_update`) |
 |---|---|---|
 | Purpose | Cross-service domain events — a durable, auditable contract | UI push to connected browsers |
-| Consumers | Other services' subscribers (EventBridge rules → SQS) | The service's own SSE relay, in the same process family |
-| Durability | Delivered via AWS EventBridge; a rule can retry/DLQ | None — a slow/absent subscriber simply misses it (`PUBLISH` doesn't queue) |
+| Consumers | Other services' subscribers (EventBridge rules → SQS) | The service's own SSE relay, in the same process (single-box-mvp.md) |
+| Durability | Delivered via AWS EventBridge; a rule can retry/DLQ | None — a slow/absent subscriber simply misses it (no queueing, no replay) |
 | Naming | Dotted `event_type` (`message.received`) as `detail-type` | Freeform `channel` string (`org:{org_id}:conversations`) |
 | Who should rely on it | Any future service | Nobody outside the browser relay — no subscriber contract |
 
@@ -68,33 +68,38 @@ sequenceDiagram
     Routing->>EB: publish_event(org_id, "conversation.assigned", {...}, source="a2z.omnichannel")
     Note over EB: Durable cross-service contract --\na future subscriber (e.g. Invoicing) could react to this
     Routing->>RT: publish_update(org_id, "org:{org_id}:conversations", {...})
-    Note over RT: UI push only -- Redis PUBLISH,\nnot the same event, no contract
+    Note over RT: UI push only -- in-process broker,\nnot the same event, no contract
 ```
 
-## Redis pub/sub — realtime UI fan-out
+## In-process broker — realtime UI fan-out
+
+Single-box MVP ([single-box-mvp.md](single-box-mvp.md)): the transport used
+to be Redis pub/sub; it's now a plain in-process `asyncio.Queue` per
+subscriber, since the API process and the Omni-Channel worker are the same
+process.
 
 ```mermaid
 flowchart LR
-    Publisher["core.realtime.publish_update(org_id, channel, payload)"] -->|"PUBLISH rt:{channel}"| Redis[("Redis")]
-    Redis -->|"SUBSCRIBE rt:{channel}"| Relay["omnichannel/stream.py\n(SSE relay, same process family)"]
+    Publisher["core.realtime.publish_update(org_id, channel, payload)"] -->|"put_nowait on every\nsubscriber queue for rt:{channel}"| Broker["core.realtime\n(in-process, dict of asyncio.Queue)"]
+    Broker -->|"Subscription.get()"| Relay["omnichannel/stream.py\n(SSE relay, same process)"]
     Relay -->|"SSE: data: {...}\n"| Browser["Connected browser"]
 ```
 
 - **Channel naming is caller-defined**, but every Omni-Channel caller scopes
   it to an org or user: `org:{org_id}:conversations`,
   `user:{user_id}:notifications`.
-- **The `rt:` key prefix is a Core/consumer contract, not exported code.**
-  `core.realtime.publish_update` prepends `rt:` before publishing;
-  `omnichannel/stream.py::_channel_key` duplicates that same prefix rather
-  than importing it, specifically because the SSE relay is MVP-only glue
-  that disappears when the service distributes onto AppSync — exporting a
-  constant from Core for a throwaway artifact was judged not worth a Core
-  change. A round-trip test (`test_stream.py`) locks the two together so
-  any drift fails loudly instead of silently breaking realtime delivery.
-- **Transport swaps, contract doesn't**: at MVP this is Redis pub/sub → SSE;
-  at distribution scale it becomes an AppSync GraphQL mutation with the
-  exact same `publish_update(org_id, channel, payload)` signature. Callers
-  never change (`app/services/omnichannel/CLAUDE.md` §6.2, §5.4).
+- **The `rt:` transport prefix is entirely Core's concern.**
+  `omnichannel/stream.py` only ever deals in logical channel names and
+  calls `core.realtime.subscribe(*channels)`; the `rt:` prefix is applied
+  inside `core.realtime` and never seen by callers. A round-trip test
+  (`test_stream.py`) still locks publish and subscribe together so any
+  change to Core's contract fails loudly here.
+- **Transport swaps, contract doesn't**: if this platform ever needs to
+  distribute across more than one process again, the transport behind
+  `publish_update`/`subscribe` swaps (an AppSync GraphQL mutation, or
+  reintroducing a shared Redis) — callers never change. See
+  [single-box-mvp.md](single-box-mvp.md)'s "Single-process is load-bearing"
+  section for why this matters *before* that happens, not after.
 
 ## Where each mechanism is used today
 

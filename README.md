@@ -3,7 +3,8 @@
 The shared infrastructure layer every A2Z service depends on — auth, membership,
 email, storage, audit, settings, events, and rate limiting. **Not a microservice:**
 a set of Python packages (`app/core/`) imported in-process by services inside a
-single FastAPI modular monolith on ECS Fargate.
+single FastAPI modular monolith, deployed on one EC2 instance (see
+[`docs/architecture/single-box-mvp.md`](docs/architecture/single-box-mvp.md)).
 
 See `CLAUDE.md` (build conventions + gaps) and `A2Z_Core_Design_TestPlan.md`
 (authoritative API/schema spec). **For everything else — architecture
@@ -33,11 +34,13 @@ make lint             # ruff check + format check + mypy --strict (same as CI)
 
 ### Running tests
 
-The suite runs **AWS against moto and Redis against fakeredis, both
-in-process** (`tests/conftest.py`), so the *only* external backend it needs is
-**Postgres** — there's no in-process fake for it. `make test` starts a Postgres
-container for you; any Postgres reachable at `DATABASE_URL` (default matches
-`.env.example` / docker-compose) works equally well. Unit tests need nothing.
+The suite runs **AWS against moto, in-process** (`tests/conftest.py`), so the
+*only* external backend it needs is **Postgres** — there's no in-process fake
+for it, and no Redis anywhere (see
+[`docs/architecture/single-box-mvp.md`](docs/architecture/single-box-mvp.md)).
+`make test` starts a Postgres container for you; any Postgres reachable at
+`DATABASE_URL` (default matches `.env.example` / docker-compose) works
+equally well. Unit tests need nothing.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -45,23 +48,28 @@ pip install -e ".[dev]"
 
 docker compose up -d postgres         # the one backend the suite can't fake
 pytest tests/unit -v                  # fast, fully in-process (no backend)
-pytest tests/integration -v           # Postgres + in-process moto/fakeredis
+pytest tests/integration -v           # Postgres + in-process moto
 pytest tests/load -m load -v          # latency checks (also needs Postgres)
 ruff check . && ruff format --check . && mypy app scripts   # lint + format + types
 
 # For manual end-to-end dev against real-ish services (not needed for tests):
-make up                               # Postgres + Redis + LocalStack + resources
+make up                               # Postgres + LocalStack + resources
 ```
 
 ## Build artifacts
 
 ```bash
-docker build -t a2z-core .            # monolith image (web; worker = same image + cmd override)
-bash scripts/build_lambda.sh          # dist/lambda.zip for both out-of-band Lambdas
+docker build -t a2z-core .            # the one image -- app + Omni-Channel worker
+                                       # (lifespan task), one process, --workers 1
 ```
 
+There is no separate Lambda packaging step — both former out-of-band
+handlers (Cognito post-confirm, SES notifications) moved in-process; see
+[`docs/architecture/single-box-mvp.md`](docs/architecture/single-box-mvp.md).
+
 CI (`.github/workflows/ci.yml`) enforces all of the above — lint/format/types,
-tests with a 90% coverage gate on `app/core`, the docker build, and
+tests with independent 90% coverage gates on `app/core`,
+`app/services/omnichannel`, and `app/services/invoicing`, the docker build, and
 `terraform fmt`/`validate` over `infra/`.
 
 ## Layout
@@ -73,15 +81,22 @@ app/
   services/
     omnichannel/       # the first product service built on Core (see docs/services/omnichannel/)
     invoicing/         # Phase 2, v1 built (see app/services/invoicing/CLAUDE.md; roadmap: docs/phase2-invoicing.md)
-  routers/             # thin HTTP layer over core/services
-  lambdas/             # out-of-band handlers (Cognito, SES/SNS)
-infra/                 # Terragrunt (modules + migrations)
-scripts/               # local provisioning, Lambda packaging
+  routers/             # thin HTTP layer over core/services, incl. ses_notifications.py (no Lambda)
+infra/                 # Terragrunt (modules + migrations) -- single-box EC2 shape
+scripts/               # local provisioning (create_local_resources.py, check_docs.py)
 tests/                 # unit / integration / load
 docs/                  # documentation index — see docs/README.md
 ```
 
 ## Status
+
+> **Infra superseded, 2026-07-27:** the "Phase E" Terragrunt described below
+> (ECS Fargate, ALB, ElastiCache, an EC2-vs-Fargate split for Omni-Channel)
+> was later collapsed into a single-box EC2 shape at ~1/6th the cost — see
+> [`docs/architecture/single-box-mvp.md`](docs/architecture/single-box-mvp.md)
+> and [`infra/README.md`](infra/README.md) for what's actually deployed
+> today. The phase log below is left as a historical record, not a live
+> description of `infra/`.
 
 Phase 1 (Core) complete: all 8 modules (`auth`, `audit`, `membership`,
 `settings`, `rate_limit`, `events`, `storage`, `email`), both Lambdas, the HTTP

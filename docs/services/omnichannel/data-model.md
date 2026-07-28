@@ -75,7 +75,7 @@ erDiagram
         string id PK
         string org_id
         string user_id
-        string status "backup row -- Redis is the hot path"
+        string status "no current writer -- presence.py was deleted, see known-issues.md"
     }
     TEMPLATES {
         string id PK
@@ -119,7 +119,7 @@ erDiagram
 | `messages` | One inbound/outbound item. `(channel_type, external_message_id)` is **unique** — the webhook-idempotency guarantee. `client_dedup_key` (nullable) is the client-side counterpart for outbound sends — the `Idempotency-Key` header on `POST .../messages`, unique per `(org_id, conversation_id)` when set (migration `0003`, API review 2026-07-18) | Active |
 | `message_attachments` | Media stored via `core.storage`, keyed `{org_id}/omnichannel/...` | Active |
 | `conversation_assignments` | **Append-only** — never updated or deleted. Load-bearing for future commission replay | Active (written from v1 day one) |
-| `presence` | Backup/audit row; **live state is Redis** (`presence.py`), not this table | Table ships; the Redis-backed module (`presence.py`) is fully implemented (see [known limitations](known-issues.md) — the design doc calls presence "deferred with auto-routing," but the code exists) |
+| `presence` | Row ships in the schema for a future presence implementation | Table ships, **unused** — the Redis-backed `presence.py` module that once existed here had zero production callers and was deleted when Redis was removed platform-wide ([single-box-mvp.md](../../architecture/single-box-mvp.md)); auto-routing/presence remains genuinely deferred (§15), matching the design doc. See [known limitations](known-issues.md) |
 | `templates` | Saved replies | Table ships, unused — templates deferred (§15) |
 | `commission_rules` / `commission_attributions` | Commission history + snapshot-at-creation attribution | Tables ship, unused — deferred until Invoicing exists (no `invoice.paid` producer) |
 

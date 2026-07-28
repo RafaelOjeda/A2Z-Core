@@ -7,6 +7,16 @@ A2Z optimizes for *low fixed cost while volume is small and spiky*. Decisions
 here are deliberate (CLAUDE.md §10) and revisited only when measured spend
 crosses the stated thresholds.
 
+**Two different scale models live in this repo — don't conflate them.**
+The table below is the **Year-12 target** (~1K orgs, ~3M emails/mo):
+ECS Fargate, RDS, ElastiCache, an ALB, a NAT gateway. **None of that is
+what's actually deployed today.** The current infra is the single-box MVP
+described in [`infra/README.md`](../infra/README.md) (~$22/mo at one user)
+and [single-box-mvp.md](architecture/single-box-mvp.md) — one EC2 instance,
+no Redis, no RDS, no ECS, no Lambdas. This page's table and the
+"Networking cost posture"/"Other cost guards" sections below describe the
+larger target scale as a forward-looking record, not the current bill.
+
 ## DynamoDB — on-demand (PAY_PER_REQUEST)
 
 All Core tables use **on-demand** billing. No capacity planning while volume is

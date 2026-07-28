@@ -7,17 +7,18 @@
 
 ```
 tests/
-├── conftest.py                    # shared fixtures: aws (moto), fake_redis, make_token
+├── conftest.py                    # shared fixtures: aws (moto), _reset_core_state, make_token
 ├── unit/                          # fast, fully mocked
 │   ├── test_auth.py, test_auth_cognito.py, test_events.py,
 │   │   test_rate_limit.py, test_realtime.py, test_secrets.py
 │   └── omnichannel/               # adapter/registry/metrics unit tests
-├── integration/                   # moto/fakeredis-backed (+ real Postgres for omnichannel)
-│   ├── test_api.py, test_audit.py, test_email.py, test_lambdas.py,
-│   │   test_membership.py, test_migration.py, test_provisioning.py,
-│   │   test_realtime.py, test_secrets.py, test_settings.py, test_storage.py
+├── integration/                   # moto-backed (+ real Postgres for omnichannel/invoicing)
+│   ├── test_api.py, test_audit.py, test_email.py, test_dependencies.py,
+│   │   test_ses_notifications_router.py, test_membership.py, test_migration.py,
+│   │   test_provisioning.py, test_realtime.py, test_secrets.py,
+│   │   test_settings.py, test_storage.py
 │   └── omnichannel/                # connections, dlq, inbox, media, message_flow,
-│                                    # models, presence, routing, stream
+│                                    # models, routing, stream, worker_loop
 └── load/                          # latency assertions (pytest -m load)
     ├── test_load.py
     └── omnichannel/test_load.py
@@ -25,9 +26,12 @@ tests/
 
 ## How the suite runs without any real AWS
 
-Core's tests run entirely **in-process** against **moto** (AWS mocks) and
-**fakeredis** — no Docker, no LocalStack required in CI
-(`tests/conftest.py`):
+Core's tests run entirely **in-process** against **moto** (AWS mocks) — no
+Docker, no LocalStack required in CI (`tests/conftest.py`). There is no
+Redis to mock anymore (single-box MVP,
+[architecture/single-box-mvp.md](architecture/single-box-mvp.md)) — an
+autouse `_reset_core_state` fixture clears the in-process realtime broker,
+rate-limit windows, and TTL caches between tests instead:
 
 ```python
 @pytest.fixture
@@ -39,17 +43,21 @@ def aws() -> Iterator[None]:
     clients.reset_clients()
 
 @pytest.fixture(autouse=True)
-def fake_redis(monkeypatch):
-    monkeypatch.setattr(clients, "redis_client", lambda: FakeRedis(decode_responses=True))
+def _reset_core_state() -> None:
+    from app.core import cache, rate_limit, realtime
+    realtime.reset()
+    rate_limit.reset()
+    cache.clear_all()
 ```
 
 - The `aws` fixture provisions every Core (and Omni-Channel SQS) resource
   inside a `moto.mock_aws()` context using the **same**
   `scripts/create_local_resources.py` that provisions LocalStack for manual
   dev — so tests and local dev never drift on table/GSI shape.
-- `fake_redis` is **autouse** — every test gets an isolated `FakeRedis`
-  instance via monkeypatching `clients.redis_client`, so tests never share
-  rate-limit windows, cached settings, or pub/sub state with each other.
+- `_reset_core_state` is **autouse** — since these modules hold plain
+  module-global state rather than a per-test-isolated backend, without this
+  a rate-limit window or cached secret set in one test would leak into the
+  next.
 - `make_token` mints valid HS256 test JWTs via `core.auth.create_test_token`
   — no real Cognito pool needed, ever, in tests.
 
@@ -67,8 +75,8 @@ matters) and truncated between tests.
 
 ```bash
 pytest tests/unit -v                          # fast, mocked
-pytest tests/integration -v                   # moto/fakeredis + real Postgres for omnichannel
-pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov-report=term-missing
+pytest tests/integration -v                   # moto + real Postgres for omnichannel/invoicing
+pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov=app/services/invoicing --cov-report=term-missing
 pytest tests/load -m load -v                  # latency checks (jittery on shared runners)
 ```
 
@@ -78,12 +86,13 @@ Postgres is reachable locally).
 
 ## Coverage gates
 
-Two **independent** 90% gates, both computed from one coverage run, so a
-dip in one package can never hide behind the other:
+Three **independent** 90% gates, all computed from one coverage run, so a
+dip in one package can never hide behind the others:
 
 ```bash
 coverage report --include="app/core/*" --fail-under=90
 coverage report --include="app/services/omnichannel/*" --fail-under=90
+coverage report --include="app/services/invoicing/*" --fail-under=90
 ```
 
 ## Cross-org isolation tests
@@ -106,8 +115,8 @@ absolute latency numbers are jittery on shared GitHub-hosted runners.
 
 ## Writing a new test
 
-- Reach for the `aws` + (autouse) `fake_redis` fixtures for anything
-  touching Core.
+- Reach for the `aws` fixture for anything touching Core; the autouse
+  `_reset_core_state` fixture already handles in-process state for you.
 - Use `make_token`/`core.auth.create_test_token` for an authenticated
   request — never construct a real Cognito flow in a test.
 - For Omni-Channel Postgres tests, use the `session` fixture from

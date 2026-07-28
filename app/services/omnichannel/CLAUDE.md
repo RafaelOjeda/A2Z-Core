@@ -9,6 +9,22 @@
 > Treat that file as the source of truth for drift before trusting any
 > "deferred"/"cut"/"done" claim below.
 
+> **⚠ Infra superseded, 2026-07-27 — read
+> [`docs/architecture/single-box-mvp.md`](../../../docs/architecture/single-box-mvp.md).**
+> §12 below describes a single-EC2 MVP with **Redis and Postgres as
+> on-box containers** and a **separate `worker` process**. Both are now
+> wrong in a specific way: Redis was removed platform-wide (not just from
+> this service) — rate limiting, realtime fan-out, and the caches this
+> file describes all moved in-process (`core.rate_limit`, `core.realtime`,
+> `core.cache`) — and the `worker` entrypoint this section calls for was
+> never actually built as a second process; instead
+> `worker.run_forever()` runs as a FastAPI lifespan background task in the
+> *same* process as the API (`RUN_OMNICHANNEL_WORKER`). `presence.py`
+> (§5.3, described here as fully implemented despite the "deferred" label)
+> was deleted for exactly this reason — see known-issues.md item #2. The
+> product/business sections (§1–§5, minus the presence/Redis specifics)
+> and the Core dependency map (§6.1) are still accurate.
+
 > **Read this first.** This file is the self-contained context for building the
 > **Omni-Channel service** inside A2Z-Core: what the product is (§1–§5), how it
 > wires into Core (§6), and how to build it with the libraries this repo

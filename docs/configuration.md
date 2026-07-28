@@ -16,12 +16,22 @@ Copy `.env.example` to `.env` for local development.
 | `AWS_REGION` | `us-east-1` | Region for every boto3 client |
 | `AWS_ENDPOINT_URL` | unset | When set, every boto3 client targets this endpoint instead of real AWS (LocalStack). Leave unset in prod |
 
-## Redis & Postgres
+## Postgres
+
+No Redis anymore — see [single-box-mvp.md](architecture/single-box-mvp.md)
+for what replaced it (all in-process: caching, rate limiting, realtime
+fan-out).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `REDIS_URL` | `redis://localhost:6379/0` | Cache, rate limiting, pub/sub, presence |
-| `DATABASE_URL` | `postgresql+asyncpg://a2z:a2z-local-dev-only@localhost:5432/a2z` | Omni-Channel's Postgres (shared instance, `omnichannel` schema) |
+| `DATABASE_URL` | `postgresql+asyncpg://a2z:a2z-local-dev-only@localhost:5432/a2z` | Shared Postgres instance (`omnichannel` + `invoicing` schemas) |
+
+## Omni-Channel worker (single-box MVP)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RUN_OMNICHANNEL_WORKER` | `false` | Starts `worker.run_forever()` as a FastAPI lifespan background task in this same process. Off by default so tests (which boot the app constantly via `TestClient`) never race a live worker against mocked AWS state; the deployed box's `user-data.sh` sets this `true` |
+| `OMNICHANNEL_WORKER_POLL_INTERVAL_SECONDS` | `2.0` | Sleep between poll iterations when both SQS queues returned zero messages |
 
 ## DynamoDB tables
 
@@ -90,7 +100,7 @@ centralized rather than scattered as literals, per `CLAUDE.md` §7/§9/§10:
 ## AWS credentials
 
 Never set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in a real
-environment — production credentials come from the ECS task's IAM role
+environment — production credentials come from the EC2 instance's IAM role
 (golden rule #5). The `.env.example` dummy values (`test`/`test`,
 `testing`/`testing` in `tests/conftest.py`) exist only to satisfy boto3's
 requirement for *some* credential value when talking to LocalStack/moto,

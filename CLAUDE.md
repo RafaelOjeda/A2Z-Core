@@ -2,15 +2,17 @@
 
 > **Read this first.** This file orients you (Claude Code) to build the **A2Z Core platform layer**. The authoritative API/schema spec is `A2Z_Core_Design_TestPlan.md` (in this repo). This file adds the build conventions, the gaps the design doc doesn't cover, and the order to build in. When the two conflict, this file wins for *process*; the design plan wins for *API signatures and schemas*.
 
+> **Infra/deployment superseded, 2026-07-27 — read [`docs/architecture/single-box-mvp.md`](docs/architecture/single-box-mvp.md) for the current reality.** This file's original build plan (below) targeted a Year-12 scale (~1K orgs): ECS Fargate, ElastiCache Redis, RDS, two out-of-band Lambdas. At one actual user, that shape was collapsed to a single EC2 instance running one process: Redis is gone entirely (rate limiting, realtime fan-out, and caching all moved in-process — see `core.rate_limit`, `core.realtime`, `core.cache`); both Lambdas moved in-app (`app/dependencies.py::current_user`, `app/routers/ses_notifications.py`); the Omni-Channel worker that this plan describes as a separate ECS/EC2 process runs as a FastAPI lifespan background task in the same process instead. The **API-level content below** (module responsibilities, schemas, conventions, golden rules) is still accurate and still the spec to build against. The **infrastructure/deployment content** (stack list, module table's backing stores, §10 cost table, the ECS Fargate framing) describes a shape that no longer exists — treat it as historical intent, not current fact, and check the single-box doc plus `infra/README.md` before making any infra-related claim.
+
 ---
 
 ## 0. TL;DR for the Agent
 
-You are building **A2Z Core**: the shared infrastructure layer that every A2Z service (Invoicing, Omni-Channel, future ones) depends on. It is **NOT a microservice** — it is a set of **Python packages** (`core/`) imported in-process by services inside a single FastAPI modular monolith deployed to ECS Fargate.
+You are building **A2Z Core**: the shared infrastructure layer that every A2Z service (Invoicing, Omni-Channel, future ones) depends on. It is **NOT a microservice** — it is a set of **Python packages** (`core/`) imported in-process by services inside a single FastAPI modular monolith, deployed to one EC2 instance (see [`docs/architecture/single-box-mvp.md`](docs/architecture/single-box-mvp.md) — this superseded the ECS Fargate target this section originally described).
 
 Build **Core standalone and fully tested** before any service exists. Core must pass all unit + integration + load tests on its own. Invoicing and Omni-Channel come later and are just clients of Core.
 
-**Stack:** Python 3.12, FastAPI, AWS (DynamoDB, RDS Postgres, S3, SES, SNS, EventBridge, Cognito, ElastiCache Redis, CloudWatch), Terragrunt for IaC, LocalStack for local dev, pytest for tests.
+**Stack:** Python 3.12, FastAPI, AWS (DynamoDB, S3, SES, SNS, EventBridge, Cognito, Secrets Manager, SQS), Terragrunt for IaC, LocalStack for local dev, pytest for tests. (No RDS, no ElastiCache Redis, no CloudWatch metrics — see the superseded-infra note above.)
 
 **Golden rules:**
 1. Every Core call is in-process (no network hop between services and Core).
@@ -96,16 +98,23 @@ Full signatures, args, returns, errors, and performance targets are in **`A2Z_Co
 
 | Module | Owns | Backing store | Spec |
 |---|---|---|---|
-| `auth` | JWT validation, claims extraction, test-token factory | Cognito JWKS (cached in Redis 24h) | Design §2.1 |
+| `auth` | JWT validation, claims extraction, test-token factory | Cognito JWKS (cached in-process 24h) | Design §2.1 |
 | `membership` | user/org/role CRUD + queries | DynamoDB `a2z-core-membership` | Design §2.2 |
 | `email` | send via SES, suppression, delivery status | SES + DynamoDB `email-events`, `suppression` | Design §2.3 |
 | `storage` | S3 up/down, signed URLs, file metadata | S3 + DynamoDB `files` | Design §2.4 |
 | `audit` | append-only event log + query | DynamoDB `a2z-core-audit` | Design §2.5 |
-| `settings` | org config, cached reads, invoice counter | DynamoDB `a2z-core-settings` + Redis | Design §2.6 |
+| `settings` | org config, invoice counter (no cache — pure DynamoDB reads) | DynamoDB `a2z-core-settings` | Design §2.6 |
 | `events` | **NEW** publish cross-service events | EventBridge | §6 below |
-| `rate_limit` | **NEW** sliding-window limits | Redis | §7 below |
-| `secrets` | **NEW (2026-07-12)** per-org/per-service credential access, Redis-cached | Secrets Manager + Redis | `app/services/omnichannel/CLAUDE.md` §6.2 |
-| `realtime` | **NEW (2026-07-12)** fan-out to connected clients | Redis pub/sub (MVP; AppSync at distribution) | `app/services/omnichannel/CLAUDE.md` §6.2 |
+| `rate_limit` | **NEW** sliding-window limits | In-process (single-box MVP — `docs/architecture/single-box-mvp.md`) | §7 below |
+| `secrets` | **NEW (2026-07-12)** per-org/per-service credential access, in-process cached | Secrets Manager + `core.cache.TTLCache` | `app/services/omnichannel/CLAUDE.md` §6.2 |
+| `realtime` | **NEW (2026-07-12)** fan-out to connected clients | In-process broker (single-box MVP; AppSync if ever distributed) | `app/services/omnichannel/CLAUDE.md` §6.2 |
+| `cache` | **NEW** shared in-process TTL cache primitive | — | `docs/architecture/single-box-mvp.md` |
+
+Note: `rate_limit`/`realtime`/`secrets`/`cache` were originally spec'd
+against Redis (see the superseded-infra note at the top of this file). The
+in-process replacement is a later, deliberate change — implement against
+what's described here and in each module's docstring, not the historical
+Redis wording that may still appear elsewhere in this file's older sections.
 
 DynamoDB table schemas (PK/SK/GSI) are in **Design §3.1**. S3 key layout in **Design §3.3**. Implement exactly these — they are load-bearing for the access patterns.
 
@@ -142,18 +151,26 @@ DynamoDB table schemas (PK/SK/GSI) are in **Design §3.1**. S3 key layout in **D
 
 ---
 
-## 5. GAP — Cognito Post-Confirmation Lambda (was missing)
+## 5. GAP — Cognito Post-Confirmation Lambda (was missing) — SUPERSEDED
+
+> **This section's Lambda no longer exists — do not rebuild it.** On the
+> single-box MVP (`docs/architecture/single-box-mvp.md`), user-row
+> provisioning moved into `app/dependencies.py::current_user`, which calls
+> `create_user_if_not_exists` on every authenticated request (skipped after
+> the first success per user id via an in-process set). This section is
+> kept for the original reasoning, which still holds — just implemented
+> without a Lambda.
 
 There must be a path that creates the Core user record the moment someone signs up. Cognito won't do it for you.
 
-**Wire it up:**
+**Wire it up (historical — see the note above for what actually ships):**
 - Cognito User Pool → **Post Confirmation** trigger → `app/lambdas/cognito_post_confirm.py`.
 - The Lambda calls `core.membership.create_user_if_not_exists(sub, email)`.
 - **Idempotent**: if the user exists, no-op. Cognito may retry the trigger.
 - It must **never block signup** on a transient Core failure — log, emit a CloudWatch metric, and let signup proceed; a reconciliation job can backfill missing user rows.
 - First-login org bootstrap (create a default org + owner membership) can live here OR in the first authenticated request. **Decision to make explicit in code/comments:** prefer doing it on first authenticated request so the Lambda stays minimal and signup stays fast.
 
-**Test:** simulate the Cognito event payload shape; assert the user row is created once and twice-calling is a no-op.
+**Test:** simulate the Cognito event payload shape; assert the user row is created once and twice-calling is a no-op. (Now: `tests/integration/test_dependencies.py` covers the same idempotency guarantee against `current_user` directly.)
 
 ---
 
@@ -192,6 +209,13 @@ async def publish_event(
 
 ## 7. GAP — Rate Limiting Module (was missing)
 
+> **Backing store superseded:** built against Redis originally (below); now
+> in-process (`dict[tuple[str, str], deque[float]]`, single-box MVP — see
+> `docs/architecture/single-box-mvp.md` and `docs/core/rate-limit.md`). The
+> contract (function signature, error type, performance target) is
+> unchanged; only "Redis sorted sets"/"Lua script" and the key format are
+> historical.
+
 Email already references "50/hour per org" but there's no limiter. Build a general one.
 
 **`core/rate_limit.py` contract:**
@@ -222,15 +246,23 @@ async def check_and_increment(
 
 ## 8. GAP — SES Infrastructure & Bounce/Complaint Flow (was thin)
 
+> **Handler superseded:** `app/lambdas/ses_notifications.py` no longer
+> exists. The bounce/complaint handler described below is now
+> `app/routers/ses_notifications.py` — an HTTPS route SNS calls directly
+> (`aws_sns_topic_subscription` with `protocol = "https"`, no Lambda), with
+> its own SNS-signature verification since it no longer has an IAM-invoke
+> trust boundary. See `docs/architecture/single-box-mvp.md`. The config-set
+> "exists" cache is now a process-lifetime `set`, not Redis.
+
 The email *API* is specified; the *plumbing* must be built and documented.
 
 **Provisioning (Terragrunt + a setup routine):**
-- One **SES Configuration Set per `{org_id}-{service_type}`** (e.g., `acme-jewelry-invoicing`). Decide and implement **who creates it**: Core lazily creates the config set on first send for a new org/service pair if it doesn't exist (cache "exists" in Redis to avoid repeat describe calls). Document this in `email.py`.
+- One **SES Configuration Set per `{org_id}-{service_type}`** (e.g., `acme-jewelry-invoicing`). Decide and implement **who creates it**: Core lazily creates the config set on first send for a new org/service pair if it doesn't exist (cache "exists" — a process-lifetime set, not Redis — to avoid repeat describe calls). Document this in `email.py`.
 - Each config set has an **event destination → SNS topic** for `Bounce` and `Complaint` (and optionally `Delivery`).
 - Sender identity: emails come from `{service_type}@{org.domain}` (e.g., `invoices@acme.com`), display name from `settings.sender_name`. Domain is verified once at org level.
 
-**Bounce/complaint handler — `app/lambdas/ses_notifications.py`:**
-- Subscribed to the SNS topic(s).
+**Bounce/complaint handler — `app/routers/ses_notifications.py` (historical text below said `app/lambdas/ses_notifications.py`):**
+- Subscribed to the SNS topic(s) via an HTTPS subscription, signature-verified per request.
 - Parses the SES notification, extracts recipient + bounce type / complaint.
 - Writes to DynamoDB `a2z-core-suppression` scoped to the org.
 - Publishes `email.bounced` / `email.complained` via `core.events.publish_event`.
@@ -260,7 +292,7 @@ Core is "locked" after Phase 1, but data still evolves. Establish the rules now:
 
 ## 10. GAP — Cost Model & DynamoDB Billing Mode (decide explicitly)
 
-State the target so infra choices are intentional. Numbers are order-of-magnitude for ~1K orgs / ~3M emails per month (Year-12 target from Design §8.1).
+State the target so infra choices are intentional. Numbers are order-of-magnitude for ~1K orgs / ~3M emails per month (Year-12 target from Design §8.1) — **not** the current single-user deployment, which runs on one EC2 instance for ~$22/mo with no RDS/ElastiCache/ECS at all; see `docs/architecture/single-box-mvp.md` and `infra/README.md`'s cost table for what's actually running today.
 
 | Component | Mode | Est. monthly |
 |---|---|---|
@@ -293,7 +325,7 @@ Set TTL attributes at write time so you never run cleanup jobs. Document in `doc
 
 ## 12. Local Development
 
-`docker-compose.yml` brings up **LocalStack** (DynamoDB, S3, SES, SNS, EventBridge) and **Redis**. Cognito isn't fully emulated by LocalStack's free tier — use the **test-token factory** (`auth.create_test_token`) in tests instead of real Cognito locally.
+`docker-compose.yml` brings up **LocalStack** (DynamoDB, S3, SES, SNS, EventBridge) and **Postgres** — no Redis (single-box MVP, `docs/architecture/single-box-mvp.md`). Cognito isn't fully emulated by LocalStack's free tier — use the **test-token factory** (`auth.create_test_token`) in tests instead of real Cognito locally.
 
 ```bash
 docker-compose up -d
@@ -357,14 +389,14 @@ Order chosen by dependency depth:
 ## 15. Definition of Done (for the whole Core deliverable)
 
 - [x] All eight `core/` modules implemented to the Design §2 signatures.
-- [x] DynamoDB tables, S3 bucket, SES config-set flow, EventBridge bus provisioned via Terragrunt **and** mirrored in `create_local_resources.py`. *(Codified — data-plane + vpc/iam/redis/cognito/ecs modules with live compositions; first real AWS apply still pending an account.)*
-- [x] Cognito post-confirm Lambda + SES SNS Lambda implemented and idempotent.
+- [x] DynamoDB tables, S3 bucket, SES config-set flow, EventBridge bus provisioned via Terragrunt **and** mirrored in `create_local_resources.py`. *(Codified — data-plane + vpc/iam/cognito modules with live compositions; first real AWS apply still pending an account. The `redis`/`ecs`/`rds` modules referenced in this note as of 2026-07-12 were later deleted entirely on the single-box MVP collapse, 2026-07-27 — see `docs/architecture/single-box-mvp.md`.)*
+- [x] Cognito post-confirm Lambda + SES SNS Lambda implemented and idempotent. *(Superseded 2026-07-27: both moved in-process — `app/dependencies.py::current_user` and `app/routers/ses_notifications.py` — no Lambda exists anymore. See `docs/architecture/single-box-mvp.md`.)*
 - [x] `events` and `rate_limit` modules implemented (the two gaps).
 - [x] Retention TTLs and on-demand billing chosen and applied.
 - [x] Unit + integration + load suites green; perf targets met; cross-org isolation proven. *(81 tests, 93% core coverage — reproduced 2026-07-12 under Python 3.12.)*
 - [x] `ruff` + `mypy --strict` clean.
 - [x] `docs/events.md`, `docs/retention.md`, `docs/cost-notes.md` written.
-- [x] `app/main.py` boots, `/health` checks DynamoDB + Redis, and the admin router can create an org, add a member, change settings, and send a test email end-to-end against LocalStack. *(Exercised by `tests/integration/test_api.py::test_full_admin_flow` — moto stands in for LocalStack, same code paths.)*
+- [x] `app/main.py` boots, `/health` checks DynamoDB + Postgres (was + Redis until the single-box collapse, 2026-07-27), and the admin router can create an org, add a member, change settings, and send a test email end-to-end against LocalStack. *(Exercised by `tests/integration/test_api.py::test_full_admin_flow` — moto stands in for LocalStack, same code paths.)*
 - [x] `secrets` + `realtime` modules implemented to Core's bar (unit + integration tests, cross-org isolation, docstrings with perf targets) per the Omni-Channel unfreeze protocol (`app/services/omnichannel/CLAUDE.md` §6.2, Build Order Step 1). Full suite re-verified green with no regressions; Core re-frozen.
 
 When all boxes are checked, Core is frozen and Invoicing (Phase 2) can begin.

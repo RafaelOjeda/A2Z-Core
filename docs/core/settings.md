@@ -6,8 +6,8 @@
 ## Purpose & responsibilities
 
 Per-org configuration (timezone, currency, domain, sender name, plan tier,
-and a free-form `metadata` escape hatch), cached for fast reads, plus an
-atomic invoice-number counter used by (future) Invoicing.
+and a free-form `metadata` escape hatch), plus an atomic invoice-number
+counter used by Invoicing.
 
 ## Internal architecture
 
@@ -15,32 +15,27 @@ atomic invoice-number counter used by (future) Invoicing.
 sequenceDiagram
     participant Caller
     participant Settings as core.settings
-    participant Redis
     participant DDB as DynamoDB (settings table)
 
     Caller->>Settings: get_org_settings(org_id)
-    Settings->>Redis: GET settings:{org_id}
-    alt cache hit
-        Redis-->>Settings: cached JSON
-        Settings-->>Caller: OrgSettings.model_validate_json(...)
-    else miss
-        Settings->>DDB: GetItem {org_id}
-        DDB-->>Settings: item or {}
-        Settings->>Settings: merge with _DEFAULTS
-        Settings->>Redis: SET settings:{org_id} EX 300
-        Settings-->>Caller: OrgSettings
-    end
+    Settings->>DDB: GetItem {org_id}
+    DDB-->>Settings: item or {}
+    Settings->>Settings: merge with _DEFAULTS
+    Settings-->>Caller: OrgSettings
 ```
 
-Writes (`set_org_settings`, `get_next_invoice_number`) update DynamoDB
-**then delete** the Redis key — the next read repopulates it, so a write is
-never followed by a stale cached read of its own effect.
+No cache sits in front of this anymore — a prior revision cached reads in
+Redis with a 5-min TTL; it was a **pure deletion** when Redis was retired
+(see [single-box-mvp.md](../architecture/single-box-mvp.md)), since one
+DynamoDB `GetItem` is well inside the documented `< 50ms` target on its own.
+Writes (`set_org_settings`, `get_next_invoice_number`) just update DynamoDB;
+there's no cache key left to invalidate.
 
 ## Public API
 
 | Function | Signature | Notes |
 |---|---|---|
-| `get_org_settings` | `(org_id) -> OrgSettings` | Redis (5min TTL) → DynamoDB fallback, defaults merged in. < 50ms target |
+| `get_org_settings` | `(org_id) -> OrgSettings` | One DynamoDB read, defaults merged in. < 50ms target |
 | `set_org_settings` | `(org_id, changes: dict, changed_by) -> OrgSettings` | Validates field names against `_MUTABLE_FIELDS`; raises `SettingsError` on an unknown field or empty `changes` |
 | `get_next_invoice_number` | `(org_id, prefix) -> str` | Atomic DynamoDB `ADD` — no gaps, no collisions, even under concurrent callers |
 
@@ -58,10 +53,6 @@ it performs a DynamoDB write, so per the "async for all I/O" convention
 | Variable | Default | Meaning |
 |---|---|---|
 | `DDB_SETTINGS_TABLE` | `a2z-core-settings` | Physical table name |
-| `REDIS_URL` | `redis://localhost:6379/0` | Cache backend |
-
-Cache TTL is hardcoded to 300s (`_CACHE_TTL_SECONDS`), not currently
-configurable per environment.
 
 ## Dependencies
 
@@ -134,7 +125,3 @@ invoice_number = await core_settings.get_next_invoice_number(org_id, prefix="INV
   "current only (no history table in MVP); overwrite; changes captured in
   audit." If you need "what was the timezone last month," reconstruct it
   from `core.audit` events, not from this module.
-- Cache invalidation is per-org, not fleet-aware beyond Redis itself — in a
-  multi-process deployment, all processes share the same Redis cache key,
-  so a write from one process invalidates the read for all of them
-  immediately (this is a feature of using shared Redis, not a caveat).

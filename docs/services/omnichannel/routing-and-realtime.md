@@ -1,16 +1,14 @@
-# Routing, Assignment, Presence & Realtime Inbox
+# Routing, Assignment & Realtime Inbox
 
-> Part of the [Omni-Channel service docs](README.md). Source: [`routing.py`](../../../app/services/omnichannel/routing.py), [`presence.py`](../../../app/services/omnichannel/presence.py), [`stream.py`](../../../app/services/omnichannel/stream.py).
+> Part of the [Omni-Channel service docs](README.md). Source: [`routing.py`](../../../app/services/omnichannel/routing.py), [`stream.py`](../../../app/services/omnichannel/stream.py).
 > **Authority:** _reference_ — describes current code; if the two disagree, the code wins.
 
 ## v1 scope
 
 Manual claim/reassign plus one auto-strategy (single-assignee). Round-robin
-and sticky routing are designed but **deferred** — see
-[known limitations](known-issues.md) for the gap between "deferred" as
-stated in the design doc and what's actually implemented (`presence.py` is
-fully built, even though presence/auto-routing are described together as
-deferred).
+and sticky routing — and presence, which they depend on — are designed but
+**deferred**; see [Presence](#presence-deferred-deleted) below for what that
+means in practice today.
 
 ## Assignment state machine
 
@@ -59,32 +57,23 @@ Stored in `core.settings`' free-form `metadata` field, namespaced
 hatch it provides for service-specific config (Design §2.6), so this
 required **no** Core change.
 
-## Presence (`presence.py`)
+## Presence (deferred, deleted)
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Presence as presence.py
-    participant Redis
-    participant PG as Postgres (backup)
+`presence.py` — a Redis-backed heartbeat module — existed for a while with
+**zero production callers** (nothing in a router or the worker ever called
+`heartbeat`/`list_online_agents`; only its own unit tests exercised it).
+When the platform collapsed to the single-box MVP and Redis was removed
+entirely (see [single-box-mvp.md](../../architecture/single-box-mvp.md)),
+that module was deleted outright rather than ported — auto-routing/presence
+is genuinely deferred (§15 of the service's design doc), so there was no
+live behavior to preserve.
 
-    Client->>Presence: heartbeat(org_id, user_id, "online") every 20-30s
-    Presence->>Redis: SET presence:{org_id}:{user_id} "online" EX 60
-    Presence->>PG: UPSERT Presence row (backup/audit only)
-    Note over Client: Tab closes -- no explicit signal needed
-    Note over Redis: Key simply expires after 60s -> "offline"
-```
-
-`get_status`/`list_online_agents` read **only Redis** — the Postgres
-`Presence` row is a backup/audit write an operator can inspect after a
-Redis flush ("who was online last"), never read on a hot path.
-
-**This module is fully implemented**, despite the service's own design doc
-(`app/services/omnichannel/CLAUDE.md` §5.3, §15) listing presence as
-"deferred with auto-routing" — see
-[known limitations](known-issues.md) for what this means in practice
-(nothing currently calls `heartbeat`/`list_online_agents` from a router or
-the worker, so the code is exercised only by its own unit tests today).
+The Postgres `presence` table and `Presence` model **stay** — they're in
+the Alembic baseline and cost nothing to leave — for when auto-routing is
+built. A future implementation should read/write that table directly (it
+becomes the live state, not a "backup" of a Redis key) with a freshness
+window on `updated_at` standing in for the old TTL, rather than
+reintroducing Redis for one module.
 
 ## Realtime inbox (SSE)
 
@@ -95,7 +84,7 @@ sequenceDiagram
     participant Router as GET /v1/omnichannel/orgs/{org_id}/stream
     participant Auth as core.auth / core.membership
     participant Stream as stream.py
-    participant Redis
+    participant RT as core.realtime (in-process broker)
 
     Browser->>Router: GET .../stream?access_token=<jwt>
     Router->>Auth: validate_jwt(token) [query param, since EventSource can't set headers]
@@ -104,30 +93,35 @@ sequenceDiagram
         Router-->>Browser: 404 NotFoundError
     end
     Router->>Stream: stream_events(org_id, user_id, is_disconnected=request.is_disconnected)
-    Stream->>Redis: SUBSCRIBE rt:org:{org_id}:conversations, rt:user:{user_id}:notifications
+    Stream->>RT: subscribe(org:{org_id}:conversations, user:{user_id}:notifications)
     Stream-->>Browser: SSE ": connected"
     loop until disconnect or 5min lifetime cap
         alt message published
-            Redis-->>Stream: pub/sub message
+            RT-->>Stream: queued message (asyncio.Queue)
             Stream-->>Browser: SSE "data: {...}"
         else idle 15s
             Stream-->>Browser: SSE ": keepalive"
         end
     end
-    Stream->>Redis: UNSUBSCRIBE + close (always, in a finally block)
+    Stream->>RT: unsubscribe + close (always, in a finally block)
 ```
 
 Key design choices, each deliberate:
 
 1. **The relay is service-owned, not Core.** `core.realtime.publish_update`
-   stops at the Redis `PUBLISH`; `stream.py` is Omni-Channel's own
+   stops at the in-process broker; `stream.py` is Omni-Channel's own
    subscribe-and-relay-to-SSE code. At the AppSync distribution phase this
    entire module disappears — browsers subscribe to AppSync directly — so
    it's deliberately MVP-only glue, not exported as a Core capability.
-2. **The `rt:{channel}` prefix is duplicated, not imported**, from
-   `core.realtime` — see
-   [event-driven architecture](../../architecture/event-driven-architecture.md#redis-pubsub--realtime-ui-fan-out)
-   for why, and the round-trip test that guards against drift.
+2. **The transport is entirely Core's concern.** `stream.py` only ever
+   deals in logical channel names (`org:{org_id}:conversations`); the `rt:`
+   prefix and everything below `core.realtime.subscribe` is a private Core
+   implementation detail — see
+   [single-box-mvp.md](../../architecture/single-box-mvp.md) for what that
+   broker actually is (an `asyncio.Queue` per subscriber, no Redis, no
+   cross-process transport — which is exactly why this whole platform runs
+   as a single process; see that doc's "Single-process is load-bearing"
+   section before ever changing that).
 3. **Auth is inline**, not the shared `CurrentUser` FastAPI dependency —
    because a browser `EventSource` cannot set an `Authorization` header.
    The token arrives as the `access_token` query parameter (a header is
@@ -164,7 +158,6 @@ subscriber-only work once Phase 2 lands.
 
 ## Known limitations
 
-See [`known-issues.md`](known-issues.md) — presence and single-assignee
-routing are real and tested, but round-robin/sticky routing are not built,
-and nothing in the current codebase calls `presence.heartbeat` from a
-router (it's reachable only by direct call or test today).
+See [`known-issues.md`](known-issues.md) — single-assignee routing is real
+and tested, but round-robin/sticky routing (and presence, which they'd
+depend on) are not built; see [Presence](#presence-deferred-deleted) above.

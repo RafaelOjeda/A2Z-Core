@@ -34,21 +34,29 @@ or was intentionally left as a "ready to flip on" artifact. Either way,
 **do not assume SMS works** because the file exists — verify against the
 registry, not the adapter file, when answering "which channels are live."
 
-## 2. Presence is fully implemented despite being described as "deferred"
+## 2. Presence — RESOLVED (deleted) 2026-07-27
 
-`app/services/omnichannel/CLAUDE.md` §5.3/§15 groups presence with
-round-robin/sticky auto-routing under "deferred — not built for v1." In
-fact, `presence.py` is a complete, tested Redis-backed implementation
-(`heartbeat`, `get_status`, `list_online_agents`), with unit test coverage.
+This item used to document that `presence.py` (a Redis-backed
+`heartbeat`/`get_status`/`list_online_agents` implementation) existed
+despite the design doc grouping presence with round-robin/sticky
+auto-routing under "deferred — not built for v1." That drift is gone now,
+not just documented: when the platform collapsed to the single-box MVP and
+Redis was removed entirely
+([single-box-mvp.md](../../architecture/single-box-mvp.md)), `presence.py`
+was **deleted outright** rather than ported, because it had zero
+production callers — nothing in a router or the worker ever called
+`heartbeat`/`list_online_agents`; only its own unit tests exercised it. The
+design doc's "deferred" was accurate all along for the feature; only the
+unused module's existence was the drift, and it no longer exists.
 
-What's actually true: **the routing strategies that would consume presence
-(round-robin, sticky) are genuinely not built** — `routing.py` only
-implements `manual` and `single_assignee`, and `set_routing_config` rejects
-any other strategy string with `RoutingError`. Presence itself works and is
-tested, but nothing in the current API surface calls `heartbeat` or
-`list_online_agents` from a router or the worker — it's reachable only via
-direct import (as a test does) or by a future caller. Treat presence as
-"built, integrated nowhere yet," not "not built."
+The `presence` Postgres table and model **stay** (cost nothing, already in
+the Alembic baseline) for when auto-routing (round-robin/sticky) is
+actually built — routing.py still only implements `manual` and
+`single_assignee`. A future implementation should read/write that table
+directly rather than reintroducing Redis for one module — see
+[single-box-mvp.md](../../architecture/single-box-mvp.md) for the
+recommended shape (a freshness window on `updated_at` standing in for the
+old TTL).
 
 ## 3. Duplicate/orphaned Alembic migration — RESOLVED 2026-07-20
 
@@ -64,17 +72,16 @@ apply has happened), so the deletion was safe. See
 was previously ambiguous (two heads); the workaround was to target
 `alembic upgrade 0003_message_dedup_key` explicitly.*
 
-## 4. RDS Terraform module exists ahead of both phases that would use it
+## 4. RDS Terraform module — RESOLVED (deleted) 2026-07-27
 
-`infra/modules/rds/` and `infra/live/prod/rds/` are fully codified, but:
-
-- [`docs/phase2-invoicing.md`](../../phase2-invoicing.md) still lists "new
-  `infra/modules/rds/`" as a Phase 2 (Invoicing) to-do that hasn't started.
-- `app/services/omnichannel/CLAUDE.md` §12 explicitly defers RDS to
-  Omni-Channel's future "distribution phase" (MVP uses an on-box Postgres
-  container).
-- Nothing in `docker-compose.yml` or CI points at this RDS module — the
-  service's actual Postgres today is the `postgres` container.
+This item used to document that `infra/modules/rds/` was fully codified
+ahead of any phase actually needing managed Postgres. It's moot now: the
+module was **deleted** when the platform collapsed to the single-box MVP
+([single-box-mvp.md](../../architecture/single-box-mvp.md)) — Postgres runs
+as a container next to the app on the one EC2 instance, permanently, not as
+a placeholder for a future RDS migration. `docker-compose.yml` and CI's
+`postgres` service container remain the actual Postgres both locally and in
+the deployed shape.
 
 See [deployment architecture](../../architecture/deployment.md#whats-actually-codified-in-infra-today)
 for the full infra-codification-vs-plan table.
@@ -104,9 +111,12 @@ the code — listed here for completeness, not as new findings:
   account/EC2 host to run it against. Called "non-negotiable" in the
   service's own design doc; still the single highest-risk open item before
   any production launch on the single-EC2 MVP shape.
-- **X-Ray + CloudWatch alarms** — the metric series they'd watch are
-  emitted and tested (`metrics.py`); the alarms themselves need a real AWS
-  account to create.
+- **X-Ray + CloudWatch alarms** — moot on the current single-box MVP:
+  `metrics.py` emits structured log lines, not CloudWatch custom metrics
+  (there's no agent shipping logs off-box either — see
+  [single-box-mvp.md](../../architecture/single-box-mvp.md)). Reintroducing
+  a real metrics backend behind the same `record_*` function names is the
+  starting point if this is ever needed again.
 - **Public Inbox API** — deferred, no external consumer demand yet.
 
 ## What this means for anyone extending the service

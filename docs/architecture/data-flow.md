@@ -10,7 +10,7 @@ flowchart LR
     subgraph DDB["DynamoDB (Core, on-demand billing)"]
         M["membership\nsingle-table, adjacency list"]
         A["audit\nappend-only, 7y TTL"]
-        S["settings\norg_id keyed, Redis-cached"]
+        S["settings\norg_id keyed"]
         EE["email_events\n90d TTL"]
         SUP["suppression\nno TTL, indefinite"]
         F["files\nsoft-deleted, optional TTL"]
@@ -22,7 +22,7 @@ flowchart LR
         MSG["messages"]
         MA["message_attachments"]
         CA["conversation_assignments\nappend-only"]
-        PR["presence (backup row)"]
+        PR["presence (table ships; unread, no writer -- see routing-and-realtime.md)"]
         TPL["templates"]
         CR["commission_rules"]
         CAT["commission_attributions"]
@@ -30,11 +30,10 @@ flowchart LR
     subgraph S3B["S3 (a2z-ledger bucket)"]
         Files["{org_id}/{service_type}/{ts}_{filename}"]
     end
-    subgraph RedisD["Redis"]
-        Cache["settings:{org_id} (5min TTL)\nsecret:{org_id}:{svc}:{key} (5min TTL)\nses:cs:{name} (24h TTL)\nmediaurl:{key} (1h TTL)"]
-        RL["ratelimit:{org_id}:{action}\n(sorted set, sliding window)"]
-        PubSub["rt:{channel} (pub/sub, ephemeral)"]
-        Presence["presence:{org_id}:{user_id}\n(60s heartbeat TTL)"]
+    subgraph InProcess["In-process (one Python process, single-box-mvp.md)"]
+        Cache["secret:{org_id}:{svc}:{key} (5min TTL)\nses:cs:{name} (process-lifetime)\nmediaurl:{key} (1h TTL) -- core.cache.TTLCache"]
+        RL["(org_id, action) -> deque[float]\n(sliding window) -- core.rate_limit"]
+        PubSub["rt:{channel} -> asyncio.Queue per subscriber\n-- core.realtime"]
     end
     subgraph SecretsMgr["AWS Secrets Manager"]
         Sec["a2z/{org_id}/{service_type}/{key}"]
@@ -55,7 +54,7 @@ implemented structurally, per store:
 | S3 | Every key is prefixed `{org_id}/{service_type}/...`. `storage._assert_org_scope` rejects any key not starting with the caller's own `{org_id}/` prefix — enforced on every download/metadata/delete call, even if a key is guessed. |
 | Postgres (`omnichannel` schema) | Every table carries an `org_id` column; every query in `inbox.py`, `handlers.py`, `routing.py`, `worker.py` filters on it. There is no cross-org join. |
 | Secrets Manager | Secret name is `a2z/{org_id}/{service_type}/{key}` — the org is baked into the resource name itself, not just a filter. |
-| Redis | Every cache/rate-limit/presence/pub-sub key is namespaced `{prefix}:{org_id}:...`. |
+| In-process state (cache, rate limit, realtime) | Every key is namespaced `{prefix}:{org_id}:...` (cache, realtime channels) or is a `(org_id, action)` tuple (rate limit) — no in-process structure is ever shared across orgs. See [single-box-mvp.md](single-box-mvp.md). |
 
 Each Core module's reference doc under [`docs/core/`](../core/README.md)
 states the specific cross-org isolation test that proves this for that
@@ -85,60 +84,63 @@ Reads (`download_file`, `get_file_metadata`, `delete_file`) all call
 `_assert_org_scope(org_id, key)` before touching S3 or DynamoDB — this is
 the one function on the cross-org-isolation critical path for storage.
 
-## Read-through cache pattern (settings, secrets)
+## In-process read-through cache pattern (secrets, media, SES config sets)
 
-`core.settings.get_org_settings` and `core.secrets.get_secret` share the
-same idiom: check Redis first, fall back to the source of truth on a miss,
-populate the cache, return.
+`core.secrets.get_secret` and Omni-Channel's `media.signed_url_for_attachment`
+share the same idiom, now backed by `core.cache.TTLCache` (an in-process
+dict, single-box-mvp.md) rather than Redis: check the cache first, fall
+back to the source of truth on a miss, populate the cache, return.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Caller
-    participant Redis
-    participant Source as DynamoDB / Secrets Manager
+    participant Cache as core.cache.TTLCache
+    participant Source as Secrets Manager / local S3 signing
 
-    Caller->>Redis: GET cache_key
+    Caller->>Cache: get(cache_key)
     alt cache hit
-        Redis-->>Caller: cached value (deserialized)
+        Cache-->>Caller: cached value
     else cache miss
-        Caller->>Source: read
-        Source-->>Caller: value (defaults merged, for settings)
-        Caller->>Redis: SET cache_key value EX <ttl>
+        Caller->>Source: read / compute
+        Source-->>Caller: value
+        Caller->>Cache: set(cache_key, value, ttl_seconds=<ttl>)
     end
 ```
 
-- `settings`: 5-minute TTL, key `settings:{org_id}`. Any write
-  (`set_org_settings`, `get_next_invoice_number`) deletes the cache key
-  before returning so the next read is never stale beyond the write's own
-  latency.
 - `secrets`: 5-minute TTL, key `secret:{org_id}:{service_type}:{key}`. This
   module **only reads** — nothing in Core rotates or writes a secret, so a
-  rotation must delete the Redis key itself or accept up to 5 minutes of
+  rotation must delete the cache key itself or accept up to 5 minutes of
   staleness (documented, accepted trade-off — `core/secrets.md`).
-- `ses:cs:{name}` (SES config-set existence) has a 24h TTL — see
-  [`core/email.md`](../core/email.md).
+- `ses:cs:{name}` (SES config-set existence) is a process-lifetime `set`,
+  not a TTL cache — a config set never goes away once created, so there's
+  nothing to expire (see [`core/email.md`](../core/email.md)).
 - `mediaurl:{s3_key}` (Omni-Channel signed attachment URLs) caches for 1h
   under a 2h signature so a cache hit never returns a near-expired URL —
   see [Omni-Channel's data model doc](../services/omnichannel/data-model.md).
 
+`core.settings.get_org_settings` has **no cache at all** — a prior revision
+cached it the same way; it was deleted outright (not ported) since one
+DynamoDB read is already inside the `< 50ms` target on its own. See
+`core/settings.md`.
+
 ## Cross-store data flow: Omni-Channel message ingestion
 
-Omni-Channel is the one place DynamoDB, Postgres, S3, SQS, and Redis all
+Omni-Channel is the one place DynamoDB, Postgres, S3, and SQS all
 participate in a single flow. See
 [message flow](../services/omnichannel/message-flow.md) for the full
 sequence diagram; in storage terms:
 
 ```mermaid
 flowchart LR
-    Webhook["Inbound webhook"] -->|"secret lookup"| SM["Secrets Manager\n(via core.secrets, Redis-cached)"]
+    Webhook["Inbound webhook"] -->|"secret lookup"| SM["Secrets Manager\n(via core.secrets, in-process cached)"]
     Webhook -->|"enqueue"| SQSIn["SQS inbound queue"]
-    SQSIn --> Worker["worker.py"]
+    SQSIn --> Worker["worker.py::run_forever\n(lifespan task, same process)"]
     Worker -->|"find-or-create"| PG["Postgres:\nchannel_identities, conversations, messages"]
     Worker -->|"attachment bytes"| S3F["S3 (core.storage)"]
     Worker -->|"message.received"| EB["EventBridge (a2z-bus)"]
-    Worker -->|"live update"| RedisPS["Redis pub/sub (core.realtime)"]
-    RedisPS --> SSE["SSE relay (stream.py) -> browser"]
+    Worker -->|"live update"| RT["core.realtime\n(in-process broker)"]
+    RT --> SSE["SSE relay (stream.py) -> browser,\nsame process"]
 ```
 
 ## Retention & lifecycle

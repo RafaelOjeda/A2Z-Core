@@ -62,7 +62,10 @@ sequenceDiagram
 3. **`CurrentUser` dependency** (`app/dependencies.py`) calls
    `core.auth.get_current_user_from_request`, which validates the bearer
    JWT (see [auth & authorization](auth-and-authorization.md)) and returns
-   the claims dict. Every authenticated router parameter is typed
+   the claims dict — then provisions the Core user row if this is the first
+   time this `sub` has been seen (see
+   [single-box-mvp.md](single-box-mvp.md), replacing the old Cognito
+   post-confirm Lambda). Every authenticated router parameter is typed
    `Annotated[dict[str, Any], Depends(current_user)]`.
 4. **`require_member` / `require_admin`** — for org-scoped endpoints, a
    second dependency loads the caller's `Membership` via
@@ -73,7 +76,7 @@ sequenceDiagram
 5. **Business call** — the router calls into `core.*` (membership, email,
    settings, ...) or an Omni-Channel service module (`handlers`, `routing`,
    `inbox`). These functions are the only place that talk to DynamoDB, S3,
-   SES, EventBridge, Postgres, or Redis.
+   SES, EventBridge, or Postgres.
 6. **Persistence + side effects** — a mutation typically, in order: performs
    its DynamoDB/Postgres write, calls `core.audit.log_audit(...)`, and
    (where applicable) `core.events.publish_event(...)` and/or
@@ -112,11 +115,14 @@ pattern above:
   [message flow](../services/omnichannel/message-flow.md).
 - **The SSE stream** (`GET /v1/omnichannel/orgs/{org_id}/stream`) — a
   long-lived streaming response, not a request/response cycle. See
-  [routing, presence & realtime](../services/omnichannel/routing-and-realtime.md).
+  [routing & realtime](../services/omnichannel/routing-and-realtime.md).
 
 ## Health checks
 
 `GET /health` (`app/routers/health.py`) is the one endpoint with no auth and
-no business logic: it pings DynamoDB (`ListTables`) and Redis (`PING`) and
-returns `200` only if both succeed, else `503`. This is what the ECS target
-group and Docker `HEALTHCHECK` probe.
+no business logic: it pings DynamoDB (`ListTables`) and Postgres
+(`SELECT 1`, via Omni-Channel's engine — any service's would do, they all
+point at the same instance) and returns `200` only if both succeed, else
+`503`. This is what the Docker `HEALTHCHECK` probes; there is no ALB target
+group anymore (single-box MVP — see
+[single-box-mvp.md](single-box-mvp.md)).

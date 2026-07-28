@@ -6,9 +6,11 @@
 ## Purpose & responsibilities
 
 Read and write access to per-org, per-service credentials stored in AWS
-Secrets Manager (e.g. an org's WhatsApp Business API token), cached in Redis
-using the same idiom `core.settings` already established. Added to Core as
-part of the documented "unfreeze protocol" when Omni-Channel needed it (see
+Secrets Manager (e.g. an org's WhatsApp Business API token), cached
+in-process (5-min TTL — see [single-box-mvp.md](../architecture/single-box-mvp.md)
+for why this moved off Redis) using the same idiom `core.settings` used to
+establish. Added to Core as part of the documented "unfreeze protocol" when
+Omni-Channel needed it (see
 [Core module reference: extending Core](README.md#extending-core)); the
 write path (`put_secret`) followed once channel connect became
 self-service. Rotation is still not Core's concern.
@@ -19,13 +21,13 @@ self-service. Rotation is still not Core's concern.
 sequenceDiagram
     participant Caller
     participant Secrets as core.secrets
-    participant Redis
+    participant Cache as core.cache.TTLCache (in-process)
     participant SM as Secrets Manager
 
     Caller->>Secrets: get_secret(org_id, service_type, key)
-    Secrets->>Redis: GET secret:{org_id}:{service_type}:{key}
+    Secrets->>Cache: get(secret:{org_id}:{service_type}:{key})
     alt cache hit
-        Redis-->>Secrets: cached JSON string
+        Cache-->>Secrets: cached JSON string
         Secrets-->>Caller: parsed dict
     else miss
         Secrets->>SM: GetSecretValue(SecretId="a2z/{org_id}/{service_type}/{key}")
@@ -34,7 +36,7 @@ sequenceDiagram
             Secrets-->>Caller: raise SecretNotFoundError
         else found
             SM-->>Secrets: SecretString (JSON)
-            Secrets->>Redis: SET cache_key raw EX 300
+            Secrets->>Cache: set(cache_key, raw, ttl_seconds=300)
             Secrets-->>Caller: parsed dict
         end
     end
@@ -55,7 +57,7 @@ service's connect-a-channel flow calls it with credentials a user just
 submitted (e.g. a WhatsApp token pasted into a form), so no engineer needs
 AWS console/CLI access to onboard an org. It upserts — a
 `ResourceNotFoundException` on `put_secret_value` falls back to
-`create_secret` — and **invalidates** the Redis cache key on write (rather
+`create_secret` — and **invalidates** the cache key on write (rather
 than write-through), so the next `get_secret` repopulates from AWS and
 can't drift from what was stored.
 
@@ -66,9 +68,9 @@ Cache TTL is hardcoded to 300s (`_CACHE_TTL_SECONDS`), matching
 
 ## Dependencies
 
-`core.clients` (`secretsmanager()`, `redis_client()`), `core.exceptions`
-(`SecretNotFoundError`), `core.logging`. No dependency on any other Core
-business-logic module.
+`core.clients` (`secretsmanager()`), `core.cache` (`TTLCache`),
+`core.exceptions` (`SecretNotFoundError`), `core.logging`. No dependency on
+any other Core business-logic module.
 
 ## Data model
 
@@ -98,13 +100,17 @@ limitations. The **write** path (`put_secret`) does wrap failures in
   the secret name `a2z/{org_id}/{service_type}/{key}` makes a cross-org read
   structurally impossible without also having that org's `org_id` string.
 - **Rotation staleness window, accepted**: `put_secret` invalidates the
-  Redis cache key (`secret:{org_id}:{service_type}:{key}`) it wrote, so a
+  cache key (`secret:{org_id}:{service_type}:{key}`) it wrote, so a
   read immediately after a write through this module is never stale. But
   Core has no rotate path — an *external* rotation (someone rotating the
   secret in AWS directly) is responsible for deleting that cache key itself.
   Absent that, a read may be stale for up to 5 minutes after such a rotation
   — a documented, accepted trade-off (`app/services/omnichannel/CLAUDE.md`
   §6.2), not a bug.
+- **Process-local, not shared** — the cache lives in this process's memory
+  only (see [single-box-mvp.md](../architecture/single-box-mvp.md)); it is
+  not a security boundary concern (Secrets Manager is still the source of
+  truth) but means a restart drops the cache, not the data.
 
 ## Example usage
 
@@ -128,9 +134,9 @@ future dedicated admin surface.
 - **Not the AWS Secrets Manager Caching Client.** A deliberate deviation
   from Omni-Channel's original external plan, which called for
   `aws-secretsmanager-caching` — that library is sync-only and would add a
-  dependency duplicating the Redis-TTL idiom Core already uses elsewhere.
-  Documented in the module docstring so it isn't "fixed" back to that
-  library later.
+  dependency duplicating the TTL-cache idiom Core already uses elsewhere
+  (`core.cache.TTLCache`). Documented in the module docstring so it isn't
+  "fixed" back to that library later.
 - Non-"not found" Secrets Manager errors (throttling, access denied, etc.)
   are not currently wrapped in a typed `CoreError` — they propagate as raw
   `ClientError`, inconsistent with every other Core module's convention.

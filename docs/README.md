@@ -22,9 +22,10 @@ the guided tour, that one is the map.
 | [`architecture/overview.md`](architecture/overview.md) | System components, layer responsibilities, why a monolith |
 | [`architecture/request-lifecycle.md`](architecture/request-lifecycle.md) | HTTP request → router → Core → response; the error-mapping convention |
 | [`architecture/auth-and-authorization.md`](architecture/auth-and-authorization.md) | JWT validation, Cognito signup flow, the role model, the role-vocabulary gap |
-| [`architecture/data-flow.md`](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Redis/Secrets Manager, and how org-scoping is enforced per store |
-| [`architecture/event-driven-architecture.md`](architecture/event-driven-architecture.md) | EventBridge vs. Redis pub/sub — two mechanisms, when to use which |
-| [`architecture/deployment.md`](architecture/deployment.md) | ECS Fargate control plane vs. Omni-Channel's single-EC2 MVP; what's actually codified vs. planned |
+| [`architecture/data-flow.md`](architecture/data-flow.md) | What lives in DynamoDB/Postgres/S3/Secrets Manager (and what's in-process now), and how org-scoping is enforced per store |
+| [`architecture/event-driven-architecture.md`](architecture/event-driven-architecture.md) | EventBridge vs. the in-process realtime broker — two mechanisms, when to use which |
+| [`architecture/deployment.md`](architecture/deployment.md) | The single-box EC2 deployment shape; what's actually codified vs. planned |
+| [`architecture/single-box-mvp.md`](architecture/single-box-mvp.md) | What moved in-process when Redis/ECS/RDS/Lambdas were removed, and the single-process constraint that creates |
 | [`architecture/microservices-distribution.md`](architecture/microservices-distribution.md) | Forward-looking plan for splitting the monolith into per-service deployables: triggers, phases, Core-as-SDK decision |
 
 ## Core platform layer (`app/core/`)
@@ -69,9 +70,9 @@ the way `docs/services/omnichannel/known-issues.md` warns against.
 |---|---|
 | [`api-reference.md`](api-reference.md) | Full HTTP surface (health, core admin, Omni-Channel) |
 | [`configuration.md`](configuration.md) | Every environment variable and config registry |
-| [`testing.md`](testing.md) | Test layout, moto/fakeredis harness, coverage gates, cross-org isolation testing |
+| [`testing.md`](testing.md) | Test layout, the moto harness, coverage gates, cross-org isolation testing |
 | [`ci-cd.md`](ci-cd.md) | The GitHub Actions pipeline, job by job |
-| [`scripts.md`](scripts.md) | `create_local_resources.py`, `build_lambda.sh`, Docker, migration scripts |
+| [`scripts.md`](scripts.md) | `create_local_resources.py`, Docker, migration scripts |
 | [`migrations.md`](migrations.md) | DynamoDB's additive-change rules vs. Alembic for Postgres |
 | [`events.md`](events.md) | The current EventBridge event catalog (wire contract) |
 | [`retention.md`](retention.md) | TTL/lifecycle policy per data store |

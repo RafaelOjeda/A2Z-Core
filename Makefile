@@ -1,9 +1,9 @@
 # A2Z Core — common dev tasks. `make help` lists them.
 #
-# The test suite runs AWS against moto and Redis against fakeredis, both
-# in-process (tests/conftest.py) — so the *only* external backend it needs is
-# Postgres, which has no in-process fake. The `pg-up` prerequisite on the test
-# targets starts it; any Postgres reachable at DATABASE_URL (default:
+# The test suite runs AWS against moto, in-process (tests/conftest.py) —
+# so the *only* external backend it needs is Postgres, which has no
+# in-process fake. The `pg-up` prerequisite on the test targets starts it;
+# any Postgres reachable at DATABASE_URL (default:
 # postgresql+asyncpg://a2z:a2z-local-dev-only@localhost:5432/a2z, matching
 # docker-compose and .env.example) works just as well.
 
@@ -28,7 +28,7 @@ pg-up: ## Start just the Postgres container (the one backend tests can't fake)
 pg-down: ## Stop the Postgres container
 	docker compose stop postgres
 
-up: ## Start all local backing services (Postgres, Redis, LocalStack) for manual dev
+up: ## Start all local backing services (Postgres, LocalStack) for manual dev
 	docker compose up -d
 	cp -n .env.example .env || true
 	$(BIN)/python -m scripts.create_local_resources
@@ -39,10 +39,10 @@ down: ## Stop all local backing services
 test: pg-up ## Run the whole suite (unit + integration + load) against Postgres
 	$(PYTEST)
 
-test-unit: ## Fast unit tests — fully in-process (moto + fakeredis), no backend needed
+test-unit: ## Fast unit tests — fully in-process (moto), no backend needed
 	$(PYTEST) tests/unit
 
-test-integration: pg-up ## Integration tests (Postgres + in-process moto/fakeredis)
+test-integration: pg-up ## Integration tests (Postgres + in-process moto)
 	$(PYTEST) tests/integration
 
 test-load: pg-up ## Load / latency checks

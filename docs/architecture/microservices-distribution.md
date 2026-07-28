@@ -30,12 +30,15 @@ already service boundaries**:
   inter-service wire contract.
 - Core never imports from services, so Core has no hidden dependency on any
   product's code.
-- **All meaningful state is already external.** Nothing correctness-critical
-  lives in process memory: membership/audit/settings/email-events are in
-  DynamoDB, files in S3, rate-limit windows and caches in Redis, credentials
-  in Secrets Manager, Omni-Channel domain data in Postgres. Two processes
-  importing the same `core/` package already share state safely — the
-  web/worker split proves it in production shape today.
+- **Most meaningful state is already external**: membership/audit/settings/
+  email-events are in DynamoDB, files in S3, credentials in Secrets Manager,
+  Omni-Channel domain data in Postgres. The one exception, noted so this
+  plan doesn't paper over it: rate-limit windows and the realtime broker
+  are now **in-process** (single-box MVP,
+  [single-box-mvp.md](single-box-mvp.md)) rather than in a shared Redis —
+  distributing to more than one process again means re-externalizing both,
+  not just "pointing two processes at the same store" the way it would
+  have before that collapse.
 - The app tier is stateless; routers are thin; every AWS client reads its
   endpoint from config.
 
@@ -45,22 +48,21 @@ appear. The boxes themselves — and their contracts — don't move.
 
 ```mermaid
 flowchart TB
-    subgraph Today["Today: one deployable"]
+    subgraph Today["Today: one deployable, one process"]
         direction TB
-        M["FastAPI app\n/v1/core + /v1/omnichannel + /v1/invoicing"]
-        W["worker process"]
+        M["FastAPI app\n/v1/core + /v1/omnichannel + /v1/invoicing\n+ the Omni-Channel worker as a lifespan task"]
     end
     subgraph Future["Distributed: same boxes, own deployables"]
         direction TB
         GW["Edge: ALB path routing → API Gateway + WAF"]
         S1["core-admin service\n/v1/core"]
-        S2["omnichannel service\n/v1/omnichannel + worker"]
+        S2["omnichannel service\n/v1/omnichannel + its own worker process"]
         S3["invoicing service\n/v1/invoicing"]
         GW --> S1 & S2 & S3
     end
     Today -.->|"§4 phases"| Future
     S1 & S2 & S3 --- SDK["core SDK (library, versioned)"]
-    SDK --- DATA["Shared data plane:\nDynamoDB · Redis · S3 · Secrets · EventBridge"]
+    SDK --- DATA["Shared data plane:\nDynamoDB · S3 · Secrets · EventBridge\n(+ a re-externalized cache/broker for\nrate-limit + realtime -- see §1)"]
 ```
 
 ## 2. When to split (triggers, not fashion)
@@ -88,8 +90,10 @@ When people say "extract Core," there are two very different options:
 
 - **Option A — Core as a shared SDK (chosen).** Each service deploys with
   the `core/` packages inside its own image and talks directly to the shared
-  data plane (DynamoDB, Redis, S3, Secrets Manager, EventBridge). "In-process
-  Core calls" (golden rule #1) stays true *within each deployable*.
+  data plane (DynamoDB, S3, Secrets Manager, EventBridge — plus whatever
+  replaces the in-process rate limiter/realtime broker once there's more
+  than one process again, §1). "In-process Core calls" (golden rule #1)
+  stays true *within each deployable*.
 - **Option B — Core as a network service.** One deployment owns all Core
   logic; services call it over HTTP/gRPC.
 
@@ -111,11 +115,15 @@ central runtime coordination matters (§4, Phase D3). The likely candidates:
   front of a sender worker) can own the actual `SendEmail` call while the
   `core.email` API stays the facade services import.
 
-Everything else (`auth`, `membership`, `audit`, `settings`, `rate_limit`,
-`events`, `storage`, `secrets`) stays a library indefinitely — their
-"centralization" is the data plane itself (e.g. rate limiting is already
-globally consistent across any number of deployables because the sliding
-window lives in one Redis).
+Everything else (`auth`, `membership`, `audit`, `settings`, `events`,
+`storage`, `secrets`) stays a library indefinitely — their "centralization"
+is the data plane itself. `rate_limit` is the one module that needs a real
+decision *before* any split: on the current single-box MVP it's in-process
+(§1), which is only globally consistent because there is exactly one
+process. Distributing it back to "globally consistent across any number of
+deployables" means re-externalizing it (a shared store, not necessarily
+Redis specifically) as part of Phase D1 — not a detail to discover after
+the fact.
 
 ## 4. The phased path
 
@@ -142,8 +150,12 @@ regardless of whether distribution ever happens.**
 
 ### Phase D1 — Split processes, keep one codebase and image
 
-The web/worker split already demonstrates the pattern: same image, different
-entrypoint, different task family. Extend it:
+Today there is exactly one process, with the Omni-Channel worker running as
+a lifespan task inside it (single-box MVP,
+[single-box-mvp.md](single-box-mvp.md)) rather than as a separate
+entrypoint of the same image. Splitting it back out to its own process is
+itself part of this phase, not a pattern already proven in production —
+and it's the trigger for re-externalizing `rate_limit`/`realtime` (§1, §3):
 
 - Run **one ECS task family per service router group**, all from the same
   image, selected by entrypoint/env (`SERVE_ROUTERS=omnichannel`).
@@ -181,16 +193,17 @@ entrypoint, different task family. Extend it:
   is one trace. Structured-log shape and the audit table don't change; log
   streams gain a `service` dimension.
 - **Local dev:** `docker-compose` grows one container per service; LocalStack
-  and Redis stay shared, mirroring production's shared data plane.
+  and Postgres stay shared, mirroring production's shared data plane —
+  plus whatever backs the re-externalized rate limiter/broker (§1).
 
 ### Phase D3 — Extract specific Core capabilities (only on their own triggers)
 
 Per §3: `realtime` to a connection gateway (AppSync or a dedicated
 WebSocket/SSE service), possibly `email` sending behind a queue. Each
 extraction keeps the existing `core.X` function signatures as the facade —
-services should not notice whether `core.realtime.publish` fans out via
-local Redis pub/sub or a remote gateway. That facade stability is the test
-of a correct extraction.
+services should not notice whether `core.realtime.publish` fans out via an
+in-process broker, a shared store, or a remote gateway. That facade
+stability is the test of a correct extraction.
 
 ## 5. What each concern becomes
 
@@ -200,14 +213,16 @@ of a correct extraction.
 | AuthN | Shared `CurrentUser` dependency | Unchanged per service (each verifies JWTs itself — zero trust means no service trusts the gateway's word alone); optional gateway JWT authorizer as defense in depth |
 | Service-to-service calls | Forbidden (imports) — events only | **Still forbidden.** Events remain the only channel; if a synchronous cross-service call ever becomes unavoidable, it gets SigV4/mTLS per [zero-trust §7](../zero-trust.md#7-maturity-roadmap-trigger-driven) and a written justification here |
 | AuthZ | `require_member`/`require_admin` per route | Unchanged — ships inside the Core SDK |
-| Rate limiting | Central Redis sliding window | Unchanged and *automatically global* across deployables (same Redis, same keys) |
-| Settings/secrets caching | Redis read-through | Unchanged; cache TTLs already bound staleness across processes |
+| Rate limiting | In-process sliding window (single process only) | **Must be re-externalized** to a shared store before D1 — today's in-process state gives each new process its own budget, silently multiplying every limit (§1) |
+| Realtime fan-out | In-process broker (single process only) | **Must be re-externalized** (or moved to AppSync/a dedicated gateway, §3) before D1 for the same reason |
+| Settings caching | None (direct DynamoDB reads) | Unchanged — was already removed as a pure deletion pre-distribution; revisit only if latency data says so |
+| Secrets/media caching | In-process TTL cache, per process | Each deployable gets its own cache with its own staleness window — already true in the single process case, so no *new* behavior, just more independent copies |
 | Cross-service events | EventBridge, org_id in every payload | Unchanged — this is the seam the whole plan leans on; contract tests (D0) guard it |
 | Audit | One DynamoDB table, `log_audit` in SDK | Unchanged; add `service` attribute to entries |
 | Data ownership | Package discipline | IAM-enforced exclusivity per service role (D2) |
 | Correlation | `X-Request-Id` middleware | Trace context propagated over HTTP and inside event metadata (D2) |
-| Deploy unit | One image, web + worker entrypoints | Task family per service (D1) → image per service (D2) |
-| Local dev | One app container + LocalStack + Redis | One container per service, same shared LocalStack/Redis |
+| Deploy unit | One image, one process (worker is a lifespan task) | Task family per service (D1, incl. splitting the worker back into its own entrypoint) → image per service (D2) |
+| Local dev | One app container + LocalStack + Postgres | One container per service, same shared LocalStack/Postgres + whatever backs the re-externalized cache/broker |
 | CI | One pipeline | Path-filtered per-service pipelines + shared SDK pipeline (D2) |
 | Testing | Unit/integration per module; cross-org tests | Same, plus event contract tests (D0) and per-service smoke tests against the shared data plane |
 

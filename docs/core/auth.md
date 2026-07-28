@@ -30,8 +30,11 @@ flowchart TD
     HSVerify --> Claims
 ```
 
-The JWKS cache is a **module-level tuple** `(fetched_at, keys_by_kid)`, not
-Redis — see the "Why in-process, not Redis" note below.
+The JWKS cache is a **module-level tuple** `(fetched_at, keys_by_kid)` — see
+the "Why in-process" note below. This was already in-process before the
+platform's later single-box collapse removed Redis everywhere else (see
+[single-box-mvp.md](../architecture/single-box-mvp.md)); the reasoning here
+was independent of that and would have been the right call either way.
 
 ## Public API
 
@@ -86,12 +89,11 @@ in-process cache. Claims are returned as a plain `dict[str, Any]`.
 - **JWTs are never logged** — see
   [`shared-infrastructure.md`](shared-infrastructure.md) redaction rules.
 
-### Why the JWKS cache is in-process, not Redis
+### Why the JWKS cache is in-process
 
 Documented trade-off, not an oversight: Cognito rotates signing keys rarely,
-an in-memory 24h cache keeps the hot auth path free of a network hop, and it
-avoids introducing a second (synchronous) Redis client just for this. The
-cost: each process instance maintains its own cache and independently
+and an in-memory 24h cache keeps the hot auth path free of a network hop.
+The cost: each process instance maintains its own cache and independently
 re-fetches once per 24h (or immediately on an unknown `kid`, treated as a
 possible rotation) — there is no cross-instance cache coherence, which is
 fine because JWKS fetches are cheap and infrequent, not because it doesn't
@@ -102,8 +104,9 @@ matter.
 ```python
 from app.core import auth
 
-# In a FastAPI dependency (see app/dependencies.py):
-def current_user(request: Request) -> dict[str, Any]:
+# In a FastAPI dependency (see app/dependencies.py -- async because it also
+# provisions the user row on first sight, single-box-mvp.md):
+async def current_user(request: Request) -> dict[str, Any]:
     return auth.get_current_user_from_request(request)
 
 # In tests:
@@ -117,8 +120,10 @@ assert claims["sub"] == "auth0|test-user"
 - Adding a claim consumers need: nothing to change here — `validate_jwt`
   already returns every claim Cognito puts on the token; callers just read
   more keys from the dict.
-- A cross-instance JWKS cache (Redis-backed) is a deferred optimization if
-  the in-process 24h TTL ever proves insufficient — not currently planned.
+- A cross-instance JWKS cache (shared store) is a deferred optimization if
+  the in-process 24h TTL ever proves insufficient — not currently planned,
+  and moot on a single box regardless (see
+  [single-box-mvp.md](../architecture/single-box-mvp.md)).
 
 ## Known limitations
 

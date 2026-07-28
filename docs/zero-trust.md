@@ -16,8 +16,9 @@ Design doc §7 (Security Model).
 ## 1. The principle
 
 **Every API call is hostile until it proves otherwise.** No request earns
-trust from where it came from (IP, VPC, ALB), from a previous request on the
-same connection, from being "internal", or from looking well-formed. Each
+trust from where it came from (IP, VPC, the on-box reverse proxy), from a
+previous request on the same connection, from being "internal", or from
+looking well-formed. Each
 call must independently pass authentication, authorization, input
 validation, and rate limiting before any business logic runs — and the
 default for anything that skips a step is **deny**, not allow.
@@ -45,7 +46,7 @@ flowchart LR
 
 | # | Gate | Enforced by | Failure |
 |---|---|---|---|
-| 1 | **Transport** — HTTPS only; plaintext never reaches a router | ALB / infra | connection refused |
+| 1 | **Transport** — HTTPS only; plaintext never reaches a router | Caddy (on-box TLS termination, single-box MVP — [single-box-mvp.md](architecture/single-box-mvp.md)) | connection refused |
 | 2 | **Correlation** — every request gets an `X-Request-Id`, threaded through all logs | `request_id_middleware` (`app/main.py`) | n/a (always applied) |
 | 3 | **Authentication** — bearer JWT signature verified against Cognito JWKS on *this* request; claims come only from the verified token | `CurrentUser` dependency → `core.auth.get_current_user_from_request` | 401 |
 | 4 | **Authorization** — caller's membership in the *path's* `org_id` is resolved fresh; role gates on mutations | `require_member` / `require_admin` (`app/dependencies.py`) | 404 / 403 |
@@ -147,8 +148,8 @@ a review-blocking finding:
    testing" and "it's not linked anywhere" are not auth mechanisms.
 2. **No trust by network origin.** No IP allowlists, no
    `X-Forwarded-For` checks, no "requests from the VPC are internal" —
-   the ALB and the process boundary are availability infrastructure, not
-   identity.
+   the on-box reverse proxy and the process boundary are availability
+   infrastructure, not identity.
 3. **No magic headers.** No `X-Internal: true`, no shared static header
    secrets between components. If a caller needs machine identity, it gets
    a verifiable token or signature (§3, §4.2).
@@ -158,11 +159,14 @@ a review-blocking finding:
 5. **No auth-decision caching.** Cache key material (JWKS) and reference
    data (settings), never the outcome of "is this user allowed" across
    requests.
-6. **No fail-open.** If Secrets Manager, Redis, or DynamoDB is unreachable
-   during a verification step, the request fails closed (5xx), it does not
-   skip the check. A rate limiter outage is the one documented judgment
-   call — if limiting is ever made best-effort, that decision is written
-   down here, not made silently in a handler.
+6. **No fail-open.** If Secrets Manager or DynamoDB is unreachable during a
+   verification step, the request fails closed (5xx), it does not skip the
+   check. The rate limiter is in-process now (single-box MVP —
+   [single-box-mvp.md](architecture/single-box-mvp.md)), so it can't itself
+   go unreachable the way a network-backed limiter could; a limiter outage
+   is still the one documented judgment call if that ever changes — if
+   limiting is ever made best-effort, that decision is written down here,
+   not made silently in a handler.
 7. **No error-shape leaks.** All failures return the uniform
    `{detail, error}` body; 404-for-non-membership hides tenant topology;
    stack traces and internal identifiers never leave the process.
@@ -209,11 +213,11 @@ constant; these strengthen individual gates:
 
 | Step | Trigger | What changes |
 |---|---|---|
-| **WAF on the ALB** | Public launch / first abuse | Managed + rate-based rules in front of gate 1; complements, never replaces, app-level auth and rate limiting |
+| **A WAF in front of the box** | Public launch / first abuse | Managed + rate-based rules in front of gate 1 (there is no ALB to attach one to on the single-box MVP — see [single-box-mvp.md](architecture/single-box-mvp.md) — so this means either a CDN/WAF layer added in front of Caddy, or reintroducing a load balancer); complements, never replaces, app-level auth and rate limiting |
 | **OAuth scopes / fine-grained claims** | First M2M or partner API consumer | Cognito client-credentials flow; gate 3 additionally checks `scope`; still short-lived tokens, still no API keys |
 | **Per-endpoint rate limits keyed by user** | First per-user abuse pattern | Registry gains `user_id`-keyed actions (the `ai.parse` limits already planned for Invoicing are the template) |
 | **mTLS / SigV4 between components** | Any component leaves the process (see the [distribution plan](architecture/microservices-distribution.md)) | The moment an API call crosses a network hop between A2Z components, that hop gets authenticated service identity *before* it ships — "it used to be in-process" is not a trust argument |
-| **API Gateway in front of Fargate** | Need for per-client quotas, usage plans, or request signing at the edge | Gains edge throttling/validation; every gate in §2 still runs in-app — the gateway is defense in depth, never the sole check |
+| **API Gateway in front of the app** | Need for per-client quotas, usage plans, or request signing at the edge | Gains edge throttling/validation; every gate in §2 still runs in-app — the gateway is defense in depth, never the sole check |
 | **Token binding / DPoP** | Compliance or high-value API surface demands proof-of-possession | Tokens bound to client keys; replay of a stolen bearer token stops working |
 
 ---

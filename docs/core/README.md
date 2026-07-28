@@ -15,20 +15,23 @@ bar (unit + integration tests, >90% coverage, cross-org isolation proven,
 | `auth.py` | JWT validation, claims, test-token factory | Cognito JWKS (in-process 24h cache) | [`auth.md`](auth.md) |
 | `membership.py` | User → Org → Role tenancy model | DynamoDB `a2z-core-membership` | [`membership.md`](membership.md) |
 | `audit.py` | Append-only compliance/debug event log | DynamoDB `a2z-core-audit` | [`audit.md`](audit.md) |
-| `settings.py` | Org config, cached reads, invoice counter | DynamoDB `a2z-core-settings` + Redis | [`settings.md`](settings.md) |
-| `rate_limit.py` | Sliding-window rate limiting | Redis | [`rate-limit.md`](rate-limit.md) |
+| `settings.py` | Org config, invoice counter | DynamoDB `a2z-core-settings` | [`settings.md`](settings.md) |
+| `rate_limit.py` | Sliding-window rate limiting | In-process (single-box MVP) | [`rate-limit.md`](rate-limit.md) |
 | `events.py` | Cross-service domain events | EventBridge (`a2z-bus`) | [`events-module.md`](events-module.md) |
 | `storage.py` | Org-scoped file storage | S3 + DynamoDB `a2z-core-files` | [`storage.md`](storage.md) |
 | `email.py` | Multi-tenant sending via SES | SES + DynamoDB `email-events`/`suppression` | [`email.md`](email.md) |
-| `secrets.py` | Per-org/per-service credential access | Secrets Manager + Redis | [`secrets.md`](secrets.md) |
-| `realtime.py` | Fan-out to connected clients | Redis pub/sub (MVP) | [`realtime.md`](realtime.md) |
+| `secrets.py` | Per-org/per-service credential access | Secrets Manager + in-process cache | [`secrets.md`](secrets.md) |
+| `realtime.py` | Fan-out to connected clients | In-process pub/sub (single-box MVP) | [`realtime.md`](realtime.md) |
+| `cache.py` | Shared in-process TTL cache primitive | — | [`single-box-mvp.md`](../architecture/single-box-mvp.md) |
 | `clients.py`, `logging.py`, `exceptions.py`, `_ddb.py`, `config.py`, `aws_resources.py` | Shared plumbing every module above depends on | — | [`shared-infrastructure.md`](shared-infrastructure.md) |
+
+See [single-box-mvp.md](../architecture/single-box-mvp.md) for what "in-process" means here and the single-process constraint it creates.
 
 ## Dependency graph
 
 ```mermaid
 flowchart TB
-    Clients["clients.py\n(boto3/redis/httpx singletons)"]
+    Clients["clients.py\n(boto3/httpx singletons)"]
     Logging["logging.py"]
     Exceptions["exceptions.py"]
     Ddb["_ddb.py\n(marshaling)"]
@@ -63,10 +66,12 @@ composes the most (settings + suppression + rate_limit + audit + events).
 
 ## Cross-cutting conventions (apply to every module)
 
-- **Async everywhere I/O happens.** Every function that touches AWS,
-  Postgres, or Redis is `async def`. Sync boto3 calls are wrapped in
+- **Async everywhere I/O happens.** Every function that touches AWS or
+  Postgres is `async def`. Sync boto3 calls are wrapped in
   `clients.run_aws(...)` (`asyncio.to_thread`) so they never block the
-  event loop.
+  event loop. (`rate_limit`/`realtime`/`cache` stay `async def` for a
+  consistent call convention even though their bodies have no I/O anymore —
+  see [single-box-mvp.md](../architecture/single-box-mvp.md).)
 - **Typed errors only.** Every module raises a subclass of `CoreError`
   (`app/core/exceptions.py`) — never a bare `Exception`, never an error
   dict. See [`shared-infrastructure.md`](shared-infrastructure.md#error-hierarchy).
@@ -75,9 +80,10 @@ composes the most (settings + suppression + rate_limit + audit + events).
   the per-store enforcement mechanism.
 - **Audit mutations, not reads.** Every module that mutates state calls
   `core.audit.log_audit(...)` in the same function, before returning.
-- **One place builds clients.** `core/clients.py` is the only file that
-  constructs a boto3, Redis, or httpx client — see
-  [`shared-infrastructure.md`](shared-infrastructure.md).
+- **One place builds AWS/HTTP clients.** `core/clients.py` is the only file
+  that constructs a boto3 or httpx client — see
+  [`shared-infrastructure.md`](shared-infrastructure.md). It builds no
+  Redis client; there is none.
 
 ## Extending Core
 

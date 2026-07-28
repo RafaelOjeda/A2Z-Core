@@ -18,20 +18,50 @@ place under ``/v1``; a breaking change to an existing endpoint's shape mints
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.core.exceptions import CoreError, RateLimitError
 from app.core.logging import get_logger, request_id_var
-from app.routers import core_admin, health, invoicing, landing, omnichannel
+from app.routers import core_admin, health, invoicing, landing, omnichannel, ses_notifications
+from app.services.omnichannel import worker as omnichannel_worker
 
 log = get_logger("app.main")
 
-app = FastAPI(title="A2Z Core", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Start/stop the Omni-Channel worker loop alongside the API process.
+
+    Single-box MVP (docs/architecture/single-box-mvp.md): there is no
+    separate worker process, so the SQS-draining loop
+    (``omnichannel.worker.run_forever``) runs as a background task in this
+    same event loop. Gated on ``settings().run_omnichannel_worker``
+    (default OFF) so every test that boots the app via ``TestClient`` -- most
+    of the integration suite -- never races a live worker against moto's SQS
+    state; the real deployment turns it on via env (Dockerfile/user-data.sh).
+    """
+    task: asyncio.Task[None] | None = None
+    if settings().run_omnichannel_worker:
+        task = asyncio.create_task(omnichannel_worker.run_forever())
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(title="A2Z Core", version="0.1.0", lifespan=lifespan)
 app.include_router(landing.router)
 app.include_router(health.router)
+app.include_router(ses_notifications.router)
 app.include_router(core_admin.router, prefix="/v1")
 app.include_router(omnichannel.router, prefix="/v1")
 app.include_router(invoicing.router, prefix="/v1")

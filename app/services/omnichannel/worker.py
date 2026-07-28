@@ -1,14 +1,30 @@
 """Worker: SQS consumer for Omni-Channel's inbound/outbound message flow (§5.6).
 
-Runs as its own process at MVP (§12: same image, ``worker`` entrypoint, a
-long-running loop calling these functions). Each ``process_*_batch`` drains
-up to ``max_messages`` and returns the count it consumed from the queue, so
-tests call it directly without a long-running process.
+Runs in-process as a FastAPI lifespan background task on the single-box MVP
+(docs/architecture/single-box-mvp.md) -- there is no separate worker process
+or image. This is a deliberate change from the §12 "same image, ``worker``
+entrypoint" plan: that entrypoint was never actually built (no ``__main__``,
+no loop -- only these batch functions, called solely by tests), so nothing
+drained these queues in the deployed artifact until :func:`run_forever` was
+added. Collapsing it into the API process rather than building the missing
+second process is what makes the in-process realtime broker
+(``core.realtime``) and rate limiter (``core.rate_limit``) correct: both are
+plain module-global state, so a second process would get its own copies --
+silently doubling every rate limit and dropping realtime updates published
+from a process no SSE stream is subscribed against. See
+:func:`run_forever`'s docstring for the constraint this places on
+``--workers``.
+
+Each ``process_*_batch`` drains up to ``max_messages`` and returns the count
+it consumed from the queue, so tests call them directly without a running
+loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,13 +32,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import SQS_MAX_RECEIVE_COUNT
+from app.config import SQS_MAX_RECEIVE_COUNT, settings
 from app.core import secrets
 from app.core.events import publish_event
 from app.core.logging import get_logger
 from app.core.realtime import publish_update
 from app.core.storage import upload_file
-from app.services.omnichannel import metrics, queues, routing
+from app.services.omnichannel import db, metrics, queues, routing
 from app.services.omnichannel.adapters.registry import get_adapter
 from app.services.omnichannel.adapters.types import OutboundContent
 from app.services.omnichannel.exceptions import ChannelAdapterError
@@ -45,14 +61,23 @@ log = get_logger("omnichannel.worker")
 _OUTBOUND_MAX_ATTEMPTS = SQS_MAX_RECEIVE_COUNT
 
 
-async def process_inbound_batch(session: AsyncSession, *, max_messages: int = 10) -> int:
+async def process_inbound_batch(
+    session: AsyncSession, *, max_messages: int = 10, wait_time_seconds: int = 0
+) -> int:
     """Drain up to ``max_messages`` inbound webhook payloads.
+
+    Args:
+        wait_time_seconds: SQS long-poll wait (0 = short poll, the default
+            tests want so a call returns immediately). :func:`run_forever`
+            passes a positive value to avoid busy-polling in production.
 
     Returns:
         The number of SQS messages consumed (not the number of normalized
         customer messages -- one webhook call can batch several).
     """
-    messages = await queues.receive_inbound(max_messages=max_messages)
+    messages = await queues.receive_inbound(
+        max_messages=max_messages, wait_time_seconds=wait_time_seconds
+    )
     for msg in messages:
         await _process_inbound_message(session, msg)
         await queues.delete_inbound(msg.receipt_handle)
@@ -232,15 +257,24 @@ async def _find_or_create_conversation(
     return conversation, True
 
 
-async def process_outbound_batch(session: AsyncSession, *, max_messages: int = 10) -> int:
+async def process_outbound_batch(
+    session: AsyncSession, *, max_messages: int = 10, wait_time_seconds: int = 0
+) -> int:
     """Drain up to ``max_messages`` queued outbound sends.
+
+    Args:
+        wait_time_seconds: SQS long-poll wait (0 = short poll, the default
+            tests want so a call returns immediately). :func:`run_forever`
+            passes a positive value to avoid busy-polling in production.
 
     Returns:
         The number of SQS messages deleted from the queue -- i.e. sent, or
         unrecoverable (no such message/context, so retrying can't help).
         A *failed send* is deliberately not counted or deleted; see below.
     """
-    messages = await queues.receive_outbound(max_messages=max_messages)
+    messages = await queues.receive_outbound(
+        max_messages=max_messages, wait_time_seconds=wait_time_seconds
+    )
     processed = 0
     for msg in messages:
         resolved = await _process_outbound_message(session, msg)
@@ -340,3 +374,99 @@ async def _find_connection(
         )
     )
     return result.scalars().first()
+
+
+# --- Long-running loop (single-box MVP, docs/architecture/single-box-mvp.md) ---
+# SQS long-poll wait per queue check when both queues were empty on the last
+# pass -- keeps the *first* check of an iteration snappy (a message that just
+# arrived is picked up within one wait) while avoiding a busy loop.
+_WAIT_TIME_SECONDS = 5
+
+
+async def run_forever(
+    *,
+    poll_interval: float | None = None,
+    wait_time_seconds: int = _WAIT_TIME_SECONDS,
+) -> None:
+    """Drain the inbound then outbound queues forever.
+
+    Intended to run as a single FastAPI lifespan background task (see
+    ``app.main``'s lifespan) -- **not** as a second process. Both
+    ``core.realtime`` and ``core.rate_limit`` are plain module-global state
+    with no cross-process transport, so a second worker process would
+    silently double every rate limit and never see realtime subscribers
+    living in the API process's memory. This is why the Dockerfile pins
+    ``--workers 1``: running two uvicorn workers would spin up two of these
+    loops, each with its own broker/limiter state, which is the same failure
+    mode from a different direction.
+
+    Polls inbound then outbound **sequentially**, each with an SQS long-poll
+    wait, rather than concurrently: ``clients.run_aws`` offloads every boto3
+    call to the default ``ThreadPoolExecutor`` (a handful of threads), and
+    two simultaneous long-polls would tie up two of them for the entire wait
+    for no benefit at this volume.
+
+    Never raises except on cancellation: every iteration's errors (a bad
+    payload, a transient Postgres or AWS blip) are logged and the loop
+    continues, because an unhandled exception here would silently and
+    permanently stop the whole inbox while the API keeps returning 200s.
+    Opens a **fresh session per iteration** rather than reusing one --
+    ``_process_inbound_message``'s own docstring notes that a failed flush
+    leaves the ORM session unusable until an explicit rollback, and a
+    long-lived session would also pin a Postgres connection for the loop's
+    entire lifetime.
+
+    Args:
+        poll_interval: Sleep between iterations when both queues returned
+            zero messages. Defaults to
+            ``settings().omnichannel_worker_poll_interval_seconds``.
+        wait_time_seconds: SQS ``WaitTimeSeconds`` for each receive call.
+    """
+    interval = (
+        poll_interval
+        if poll_interval is not None
+        else settings().omnichannel_worker_poll_interval_seconds
+    )
+    log.info("omnichannel.worker.started", extra={"poll_interval": interval})
+    try:
+        while True:
+            inbound_count = await _run_iteration(
+                process_inbound_batch, wait_time_seconds, "inbound"
+            )
+            outbound_count = await _run_iteration(
+                process_outbound_batch, wait_time_seconds, "outbound"
+            )
+            if inbound_count == 0 and outbound_count == 0:
+                await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        log.info("omnichannel.worker.stopped")
+        raise
+
+
+_BatchFn = Callable[..., Awaitable[int]]
+
+
+async def _run_iteration(
+    batch_fn: _BatchFn,
+    wait_time_seconds: int,
+    label: str,
+) -> int:
+    """Run one ``process_{in,out}bound_batch`` call in its own session.
+
+    Isolated so a single bad iteration (one malformed message, one dropped
+    DB connection) can't take down the loop -- everything except
+    ``CancelledError`` is caught and logged, returning 0 so the caller's
+    "did anything happen" check treats this iteration as idle rather than
+    retrying immediately in a tight error loop.
+    """
+    try:
+        async with db.get_session_context() as session:
+            count: int = await batch_fn(
+                session, max_messages=10, wait_time_seconds=wait_time_seconds
+            )
+            return count
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception(f"omnichannel.worker.{label}_iteration_failed")
+        return 0

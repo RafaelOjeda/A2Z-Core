@@ -123,6 +123,36 @@ async def test_normalize_inbound_plain_text() -> None:
     assert msg.attachments == []
 
 
+async def test_normalize_inbound_accepts_base64_raw_mime() -> None:
+    """The base64-str variant exists for a caller that can't put raw bytes on
+    an SQS/JSON message body -- see _resolve_raw_mime."""
+    raw = b"From: customer@example.com\r\nSubject: Hi\r\n\r\nHello"
+    messages = await adapter.normalize_inbound(
+        {"raw_mime": base64.b64encode(raw).decode(), "external_message_id": "ses-in-b64"}
+    )
+    assert messages[0].external_id == "customer@example.com"
+
+
+async def test_normalize_inbound_fetches_via_s3_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = b"From: customer@example.com\r\nSubject: Hi\r\n\r\nHello from S3"
+    mock_download = AsyncMock(return_value=raw)
+    monkeypatch.setattr(email_adapter_module, "download_file", mock_download)
+
+    messages = await adapter.normalize_inbound(
+        {"s3_key": "org-a/omnichannel/raw.eml", "org_id": "org-a", "external_message_id": "ses-s3"}
+    )
+
+    mock_download.assert_called_once_with("org-a", "org-a/omnichannel/raw.eml")
+    assert messages[0].external_id == "customer@example.com"
+    assert messages[0].body_text is not None
+    assert "Hello from S3" in messages[0].body_text
+
+
+async def test_normalize_inbound_requires_raw_mime_or_s3_key() -> None:
+    with pytest.raises(ChannelAdapterError):
+        await adapter.normalize_inbound({"external_message_id": "ses-bad"})
+
+
 async def test_normalize_inbound_multipart_with_attachment() -> None:
     mime = MIMEMultipart("mixed")
     mime["From"] = "customer@example.com"

@@ -74,15 +74,27 @@ class EmailAdapter:
     async def normalize_inbound(
         self, raw_payload: dict[str, Any]
     ) -> list[NormalizedInboundMessage]:
-        """Parse raw MIME (fetched from S3 by the worker, §5.2) into one message.
+        """Parse raw MIME into one message.
 
-        ``raw_payload`` is ``{"raw_mime": bytes, "external_message_id": str}``.
-        The worker supplies ``external_message_id`` from the SES notification
-        (``mail.messageId``) up front, since the idempotency unique
-        constraint (``models.py::uq_message_idempotency``) is keyed on it.
+        ``raw_payload`` always carries ``external_message_id`` (from the SES
+        notification's ``mail.messageId``, supplied up front since the
+        idempotency unique constraint -- ``models.py::uq_message_idempotency``
+        -- is keyed on it) plus exactly one of:
+
+        - ``raw_mime``: the MIME bytes directly (also accepts a base64 ``str``,
+          for a caller that can't put raw bytes on an SQS/JSON message body).
+        - ``s3_key`` + ``org_id``: fetched via ``core.storage.download_file``.
+          This is the real production shape -- SES's receipt pipeline (SES
+          receipt rule -> S3 -> the shared inbound SQS queue, §5.2) can't put
+          MIME bytes directly on an SQS message body, so the enqueued payload
+          instead carries the S3 key SES wrote it to. ``org_id`` has to travel
+          in ``raw_payload`` alongside ``s3_key`` (not just ``msg.attributes``)
+          because ``download_file`` is org-scoped and the ``ChannelAdapter``
+          Protocol's ``normalize_inbound`` takes no separate ``org_id``
+          parameter.
         """
-        raw_mime: bytes = raw_payload["raw_mime"]
         external_message_id: str = raw_payload["external_message_id"]
+        raw_mime = await _resolve_raw_mime(raw_payload)
         mime = message_from_bytes(raw_mime)
 
         from_addr = mime.get("From", "")

@@ -132,6 +132,8 @@ async def mark_read(
 
 class SendReplyRequest(BaseModel):
     body_text: str
+    # Email-only (OutboundContent.subject); every other channel ignores it.
+    subject: str | None = None
 
 
 class SendReplyResponse(BaseModel):
@@ -163,6 +165,7 @@ async def send_reply(
         user["sub"],
         body.body_text,
         client_dedup_key=idempotency_key,
+        subject=body.subject,
     )
     if not created:
         response.status_code = 200

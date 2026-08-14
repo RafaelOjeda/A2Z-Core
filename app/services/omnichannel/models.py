@@ -175,6 +175,11 @@ class Message(Base):
     channel_type: Mapped[str] = mapped_column(Text, nullable=False)
     external_message_id: Mapped[str] = mapped_column(Text, nullable=False)
     body_text: Mapped[str | None] = mapped_column(Text)
+    # Meaningful for email only; other channels' adapters ignore it (§7
+    # OutboundContent.subject). Nullable, no channel-based validation here --
+    # the router stays channel-agnostic; a non-email adapter simply never
+    # reads it.
+    subject: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str] = mapped_column(Text, nullable=False, default="text/plain")
     status: Mapped[str] = mapped_column(Text, nullable=False, default="received")
     sent_by_user_id: Mapped[str | None] = mapped_column(String, nullable=True)

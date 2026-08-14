@@ -99,3 +99,34 @@ async def test_channel_type_is_text_not_enum(session: AsyncSession) -> None:
         )
     )
     assert result.scalar_one() == "text"
+
+
+async def test_message_subject_is_nullable_and_persists(session: AsyncSession) -> None:
+    """Migration 0004 -- meaningful for email only; every other channel leaves it NULL."""
+    identity = await _make_identity(session, "org-a")
+    convo = await _make_conversation(session, "org-a", identity.id)
+
+    with_subject = Message(
+        org_id="org-a",
+        conversation_id=convo.id,
+        direction="outbound",
+        channel_type="email",
+        external_message_id="pending:1",
+        body_text="see attached",
+        subject="Your invoice",
+    )
+    without_subject = Message(
+        org_id="org-a",
+        conversation_id=convo.id,
+        direction="outbound",
+        channel_type="whatsapp",
+        external_message_id="pending:2",
+        body_text="On its way!",
+    )
+    session.add_all([with_subject, without_subject])
+    await session.commit()
+
+    await session.refresh(with_subject)
+    await session.refresh(without_subject)
+    assert with_subject.subject == "Your invoice"
+    assert without_subject.subject is None

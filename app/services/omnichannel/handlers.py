@@ -49,6 +49,7 @@ async def send_reply(
     body_text: str,
     *,
     client_dedup_key: str | None = None,
+    subject: str | None = None,
 ) -> tuple[Message, bool]:
     """Send an agent's reply in a conversation (§5.6, the outbound half).
 
@@ -71,6 +72,10 @@ async def send_reply(
     Args:
         client_dedup_key: Optional caller-supplied idempotency key, unique
             per ``(org_id, conversation_id)``.
+        subject: Meaningful for email only (``OutboundContent.subject``);
+            every other channel's adapter ignores it. Not validated against
+            ``channel_type`` here -- the handler stays channel-agnostic, same
+            as ``body_text``.
 
     Returns:
         ``(message, created)`` -- ``created`` is ``False`` when an existing
@@ -125,6 +130,7 @@ async def send_reply(
         # send (models.py: external_message_id is NOT NULL + unique).
         external_message_id=f"pending:{uuid.uuid4()}",
         body_text=body_text,
+        subject=subject,
         content_type="text/plain",
         status="queued",
         sent_by_user_id=user_id,

@@ -325,7 +325,9 @@ async def _process_outbound_message(session: AsyncSession, msg: queues.QueueMess
 
     try:
         result = await adapter.send_outbound(
-            identity.external_id, OutboundContent(body_text=message.body_text), credentials
+            identity.external_id,
+            OutboundContent(subject=message.subject, body_text=message.body_text),
+            credentials,
         )
     except ChannelAdapterError:
         metrics.record_send_result(message.channel_type, success=False)

@@ -191,7 +191,12 @@ async def create_connection(
                 f"channel_type={channel_type!r} requires credentials "
                 "(pass credentials or credentials_secret_key)"
             )
-    else:
+    elif channel_type == ChannelType.EMAIL.value:
+        # Deliberately keyed on the channel identity, not just
+        # `requires_credentials=False` -- this branch's SES domain-verification
+        # side effect is email-specific onboarding, not generic "no credential
+        # needed" behavior. A future credential-free channel must not fall
+        # into it by accident; it would need its own explicit branch here.
         if "@" not in provider_account_id:
             raise ConnectionValidationError(
                 "email connections require provider_account_id to be an address (user@domain)"
@@ -199,6 +204,8 @@ async def create_connection(
         secret_key = ""
         domain = provider_account_id.rsplit("@", 1)[1]
         dns_records = await core_email.start_domain_verification(org_id, domain, actor_user_id)
+    else:
+        secret_key = ""
 
     connection = ChannelConnection(
         id=connection_id,

@@ -78,7 +78,7 @@ async def handle_webhook(
     secret_bundle = await secrets.get_secret(
         connection.org_id, "omnichannel", connection.credentials_secret_key
     )
-    signing_secret = secret_bundle.get("app_secret", "")
+    signing_secret = secret_bundle.get(adapter.signing_secret_key, "")
     if not await adapter.verify_inbound_signature(raw_body, headers, signing_secret):
         raise WebhookSignatureError(
             f"Signature verification failed for connection {connection_id!r}"

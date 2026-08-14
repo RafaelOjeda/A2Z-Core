@@ -90,3 +90,8 @@ def test_all_meta_leaves_inherit_the_base() -> None:
     assert issubclass(WhatsAppAdapter, MetaGraphAdapter)
     assert issubclass(MessengerAdapter, MetaGraphAdapter)
     assert issubclass(InstagramAdapter, MetaGraphAdapter)
+
+
+def test_every_meta_leaf_shares_the_signing_secret_key() -> None:
+    assert WhatsAppAdapter().signing_secret_key == "app_secret"
+    assert MessengerAdapter().signing_secret_key == "app_secret"

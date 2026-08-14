@@ -317,7 +317,7 @@ async def _process_outbound_message(session: AsyncSession, msg: queues.QueueMess
 
     adapter = get_adapter(message.channel_type)
     credentials: dict[str, Any] = {"org_id": message.org_id}
-    if message.channel_type != "email":
+    if adapter.supported_features.requires_credentials:
         secret_bundle = await secrets.get_secret(
             message.org_id, "omnichannel", connection.credentials_secret_key
         )

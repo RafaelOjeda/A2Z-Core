@@ -26,6 +26,13 @@ class ChannelAdapter(Protocol):
     the system may know which channel it's talking to beyond this contract."""
 
     supported_features: SupportedFeatures
+    # The key this channel's signing secret is stored under in the secret
+    # bundle ``core.secrets`` returns for a connection (e.g. Meta channels'
+    # shared "app_secret"; "" for a channel with no webhook signature to
+    # verify, like email). Lets the generic webhook layer (webhooks.py) stay
+    # channel-agnostic instead of assuming every adapter's secret uses the
+    # same key name.
+    signing_secret_key: str
 
     async def verify_inbound_signature(
         self, raw_body: bytes, headers: dict[str, str], secret: str

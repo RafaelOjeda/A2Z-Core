@@ -48,6 +48,9 @@ class MetaGraphAdapter:
     ``interpret_delivery_webhook``) to satisfy the ``ChannelAdapter`` Protocol.
     """
 
+    # Every Meta channel signs with the same secret-bundle key.
+    signing_secret_key = "app_secret"
+
     async def verify_inbound_signature(
         self, raw_body: bytes, headers: dict[str, str], secret: str
     ) -> bool:

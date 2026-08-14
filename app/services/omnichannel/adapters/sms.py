@@ -43,6 +43,8 @@ class SmsAdapter:
     """Channel adapter for SMS via AWS SNS. Implements adapters.base.ChannelAdapter."""
 
     supported_features = SupportedFeatures()
+    # No HTTP webhook to sign -- same reasoning as verify_inbound_signature below.
+    signing_secret_key = ""
 
     def __init__(self, org_id: str) -> None:
         self._org_id = org_id

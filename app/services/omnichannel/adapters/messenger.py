@@ -67,11 +67,16 @@ class MessengerPlatformAdapter(MetaGraphAdapter):
     # overrides this to the IG professional-account id.
     _account_id_key: str = "page_id"
 
+    # read_receipts=False: a Messenger `read` event is watermark-only (covers
+    # every message up to a timestamp, not specific ids) and is intentionally
+    # not turned into a DeliveryStatusUpdate by interpret_delivery_webhook
+    # below -- so, unlike WhatsApp, this adapter can never actually report a
+    # message as read. Only `delivered` is real here.
     supported_features = SupportedFeatures(
         templates=False,
         rich_media=False,
         typing_indicators=False,
-        read_receipts=True,
+        read_receipts=False,
         requires_credentials=True,
     )
 

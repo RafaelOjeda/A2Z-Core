@@ -11,10 +11,11 @@ moto/Postgres, not mocks.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 from datetime import datetime, timezone
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from unittest.mock import AsyncMock
 
 import httpx
@@ -23,9 +24,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SQS_MAX_RECEIVE_COUNT
-from app.core import clients
+from app.core.email import EmailResult, EmailStatus
+from app.core.exceptions import SuppressionListError
 from app.core.membership import Membership, Role
+from app.core.storage import upload_file
 from app.services.omnichannel import handlers, queues, webhooks, worker
+from app.services.omnichannel.adapters import email as email_adapter_module
 from app.services.omnichannel.adapters import whatsapp as whatsapp_module
 from app.services.omnichannel.exceptions import (
     ChannelAdapterError,
@@ -39,75 +43,25 @@ from app.services.omnichannel.models import (
     ChannelIdentity,
     Conversation,
     Message,
+    MessageAttachment,
 )
 
+from .conftest import APP_SECRET as _APP_SECRET
+from .conftest import member_stub as _member_stub
+from .conftest import mock_realtime_and_events as _mock_realtime_and_events
+from .conftest import seed_connection as _seed_connection
+from .conftest import seed_identity_and_conversation as _seed_identity_and_conversation
+from .conftest import seed_secret as _seed_secret
+from .conftest import sign as _sign
+from .conftest import whatsapp_message_payload
+
 pytestmark = pytest.mark.integration
-
-_APP_SECRET = "wa-app-secret"
-
-
-def _sign(raw_body: bytes) -> str:
-    mac = hmac.new(_APP_SECRET.encode("utf-8"), raw_body, hashlib.sha256)
-    return f"sha256={mac.hexdigest()}"
-
-
-async def _seed_secret(org_id: str, key: str, value: dict[str, str]) -> None:
-    await clients.run_aws(
-        clients.secretsmanager().create_secret,
-        Name=f"a2z/{org_id}/omnichannel/{key}",
-        SecretString=json.dumps(value),
-    )
-
-
-async def _seed_connection(
-    session: AsyncSession, org_id: str = "org-a", channel_type: str = "whatsapp"
-) -> ChannelConnection:
-    connection = ChannelConnection(
-        org_id=org_id,
-        channel_type=channel_type,
-        display_name="Test WhatsApp",
-        provider_account_id="15550001111",
-        credentials_secret_key="whatsapp-main",
-        status="active",
-    )
-    session.add(connection)
-    await session.commit()
-    return connection
 
 
 def _whatsapp_payload(
     from_number: str = "15551234567", text: str = "Hi there", wamid: str = "wamid.ABC"
 ) -> bytes:
-    payload = {
-        "entry": [
-            {
-                "changes": [
-                    {
-                        "value": {
-                            "contacts": [{"wa_id": from_number, "profile": {"name": "Jane"}}],
-                            "messages": [
-                                {
-                                    "from": from_number,
-                                    "id": wamid,
-                                    "type": "text",
-                                    "text": {"body": text},
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
-        ]
-    }
-    return json.dumps(payload).encode("utf-8")
-
-
-def _mock_realtime_and_events(monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:
-    mock_publish_event = AsyncMock()
-    mock_publish_update = AsyncMock()
-    monkeypatch.setattr(worker, "publish_event", mock_publish_event)
-    monkeypatch.setattr(worker, "publish_update", mock_publish_update)
-    return mock_publish_event, mock_publish_update
+    return json.dumps(whatsapp_message_payload(from_number, text, wamid)).encode("utf-8")
 
 
 # --- Inbound: webhook -> SQS -> worker -> persistence ---
@@ -199,6 +153,100 @@ async def test_webhook_retry_produces_one_message_row(
     assert len(messages) == 1  # but the idempotency constraint held: one row
 
 
+# --- Inbound email: S3-fetched MIME -> worker -> persistence (§5.2 Step 5) ---
+
+
+async def test_inbound_email_flow_fetches_mime_from_s3(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production shape for inbound email: SES's receipt pipeline can't
+    put MIME bytes on an SQS message body, so it writes to S3 and the
+    adapter fetches by key (adapters/email.py::_resolve_raw_mime). Exercises
+    the real path -- moto S3 upload, then the worker's normal
+    normalize_inbound -> persist -> attachment-upload flow, no mocking of
+    the adapter itself."""
+    _mock_realtime_and_events(monkeypatch)
+    connection = await _seed_connection(session, channel_type="email")
+
+    mime = MIMEMultipart("mixed")
+    mime["From"] = "customer@example.com"
+    mime["Subject"] = "Question about my order"
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText("Is this in stock?", "plain"))
+    mime.attach(alt)
+    part = MIMEApplication(b"screenshot-bytes")
+    part.add_header("Content-Disposition", "attachment", filename="screenshot.png")
+    mime.attach(part)
+
+    stored = await upload_file(
+        connection.org_id, "omnichannel", "raw.eml", mime.as_bytes(), "message/rfc822", "system"
+    )
+
+    await queues.enqueue_inbound(
+        org_id=connection.org_id,
+        channel_type="email",
+        connection_id=connection.id,
+        raw_payload={
+            "s3_key": stored.key,
+            "org_id": connection.org_id,
+            "external_message_id": "ses-msg-1",
+        },
+    )
+    processed = await worker.process_inbound_batch(session)
+    assert processed == 1
+
+    identities = (await session.execute(select(ChannelIdentity))).scalars().all()
+    assert len(identities) == 1
+    assert identities[0].external_id == "customer@example.com"
+    assert identities[0].channel_type == "email"
+
+    messages = (await session.execute(select(Message))).scalars().all()
+    assert len(messages) == 1
+    assert messages[0].external_message_id == "ses-msg-1"
+    assert messages[0].body_text == "Is this in stock?"
+
+    attachments = (await session.execute(select(MessageAttachment))).scalars().all()
+    assert len(attachments) == 1
+    assert attachments[0].content_type == "application/octet-stream"
+    assert attachments[0].size_bytes == len(b"screenshot-bytes")
+
+
+async def test_inbound_email_duplicate_delivery_is_idempotent(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_realtime_and_events(monkeypatch)
+    connection = await _seed_connection(session, channel_type="email")
+
+    mime = MIMEText("hello again")
+    mime["From"] = "customer@example.com"
+    stored = await upload_file(
+        connection.org_id, "omnichannel", "raw.eml", mime.as_bytes(), "message/rfc822", "system"
+    )
+    raw_payload = {
+        "s3_key": stored.key,
+        "org_id": connection.org_id,
+        "external_message_id": "ses-msg-dup",
+    }
+
+    await queues.enqueue_inbound(
+        org_id=connection.org_id,
+        channel_type="email",
+        connection_id=connection.id,
+        raw_payload=raw_payload,
+    )
+    await queues.enqueue_inbound(
+        org_id=connection.org_id,
+        channel_type="email",
+        connection_id=connection.id,
+        raw_payload=raw_payload,
+    )
+    processed = await worker.process_inbound_batch(session, max_messages=10)
+    assert processed == 2
+
+    messages = (await session.execute(select(Message))).scalars().all()
+    assert len(messages) == 1
+
+
 # --- Webhook subscription verification (GET handshake) ---
 
 
@@ -259,24 +307,6 @@ async def test_verify_subscription_not_supported_for_email(
 # --- Outbound: handler -> SQS -> worker -> adapter send ---
 
 
-async def _seed_identity_and_conversation(
-    session: AsyncSession, org_id: str, channel_type: str = "whatsapp"
-) -> Conversation:
-    identity = ChannelIdentity(org_id=org_id, channel_type=channel_type, external_id="15551234567")
-    session.add(identity)
-    await session.flush()
-    conversation = Conversation(org_id=org_id, customer_identity_id=identity.id, status="open")
-    session.add(conversation)
-    await session.commit()
-    return conversation
-
-
-def _member_stub(org_id: str) -> Membership:
-    return Membership(
-        user_id="u1", org_id=org_id, role=Role.MEMBER, joined_at=datetime.now(timezone.utc)
-    )
-
-
 async def test_outbound_flow_sends_and_marks_sent(
     aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -312,6 +342,153 @@ async def test_outbound_flow_sends_and_marks_sent(
     mock_publish_event.assert_called_once()
     assert mock_publish_event.call_args.args[1] == "message.sent"
     mock_publish_update.assert_called_once()
+
+
+async def test_outbound_prefers_active_connection_deterministically(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two connections on the same org/channel: a disabled one must never be
+    picked for outbound (webhooks.py already enforces this for inbound), and
+    the choice must be deterministic -- oldest-active-wins -- not whatever
+    order Postgres happens to return (worker.py::_find_connection)."""
+    disabled = await _seed_connection(session)
+    disabled.status = "disabled"
+    disabled.credentials_secret_key = "whatsapp-disabled"
+    await session.commit()
+    await _seed_secret(
+        disabled.org_id,
+        disabled.credentials_secret_key,
+        {"app_secret": _APP_SECRET, "access_token": "wrong-tok", "phone_number_id": "999"},
+    )
+
+    active = ChannelConnection(
+        org_id=disabled.org_id,
+        channel_type="whatsapp",
+        display_name="Active WhatsApp",
+        provider_account_id="15550002222",
+        credentials_secret_key="whatsapp-active",
+        status="active",
+    )
+    session.add(active)
+    await session.commit()
+    await _seed_secret(
+        active.org_id,
+        active.credentials_secret_key,
+        {"app_secret": _APP_SECRET, "access_token": "right-tok", "phone_number_id": "123"},
+    )
+
+    conversation = await _seed_identity_and_conversation(session, disabled.org_id)
+    mock_post = AsyncMock(return_value={"messages": [{"id": "wamid.OUT1"}]})
+    monkeypatch.setattr(whatsapp_module, "_post_graph_api", mock_post)
+    monkeypatch.setattr(
+        "app.services.omnichannel.access.get_membership",
+        AsyncMock(return_value=_member_stub(disabled.org_id)),
+    )
+
+    await handlers.send_reply(session, disabled.org_id, conversation.id, "u1", "hi")
+    processed = await worker.process_outbound_batch(session)
+    assert processed == 1
+
+    _url, headers, _payload = mock_post.call_args.args
+    assert headers["Authorization"] == "Bearer right-tok"
+
+
+async def test_email_outbound_failure_follows_mark_failed_path(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CoreError from core.email.send_email (suppression, over-limit, ...)
+    must be wrapped as ChannelAdapterError by the email adapter so it follows
+    the normal retry/mark-failed path instead of escaping
+    _process_outbound_message unhandled (the bug this hardens against)."""
+    connection = await _seed_connection(session, channel_type="email")
+    conversation = await _seed_identity_and_conversation(session, connection.org_id, "email")
+    monkeypatch.setattr(
+        "app.services.omnichannel.access.get_membership",
+        AsyncMock(return_value=_member_stub(connection.org_id)),
+    )
+    monkeypatch.setattr(
+        email_adapter_module,
+        "send_email",
+        AsyncMock(side_effect=SuppressionListError("suppressed")),
+    )
+
+    message, _created = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi"
+    )
+
+    # Must not raise -- process_outbound_batch swallows the send failure and
+    # leaves the message queued for SQS's own retry, exactly like any other
+    # channel's ChannelAdapterError.
+    processed = await worker.process_outbound_batch(session)
+    assert processed == 0
+
+    await session.refresh(message)
+    assert message.status == "queued"
+
+
+async def test_email_reply_subject_reaches_send_email(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dead plumbing this closes: OutboundContent.subject has always been
+    forwarded by EmailAdapter.send_outbound, but nothing upstream ever
+    populated it until SendReplyRequest.subject / Message.subject (0004)."""
+    connection = await _seed_connection(session, channel_type="email")
+    conversation = await _seed_identity_and_conversation(session, connection.org_id, "email")
+    monkeypatch.setattr(
+        "app.services.omnichannel.access.get_membership",
+        AsyncMock(return_value=_member_stub(connection.org_id)),
+    )
+    mock_send = AsyncMock(
+        return_value=EmailResult(
+            message_id="ses-1",
+            status=EmailStatus.SENT,
+            timestamp=datetime.now(timezone.utc),
+            external_message_id="ses-1",
+        )
+    )
+    monkeypatch.setattr(email_adapter_module, "send_email", mock_send)
+
+    message, _created = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "see attached", subject="Your invoice"
+    )
+    assert message.subject == "Your invoice"
+
+    processed = await worker.process_outbound_batch(session)
+    assert processed == 1
+
+    _args, kwargs = mock_send.call_args
+    assert kwargs["subject"] == "Your invoice"
+
+
+async def test_non_email_reply_with_subject_is_harmless(
+    aws: None, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subject on a non-email channel is stored but never sent -- the
+    router/handler stay channel-agnostic rather than rejecting it."""
+    connection = await _seed_connection(session)
+    await _seed_secret(
+        connection.org_id,
+        connection.credentials_secret_key,
+        {"app_secret": _APP_SECRET, "access_token": "tok", "phone_number_id": "123"},
+    )
+    conversation = await _seed_identity_and_conversation(session, connection.org_id)
+    monkeypatch.setattr(
+        "app.services.omnichannel.access.get_membership",
+        AsyncMock(return_value=_member_stub(connection.org_id)),
+    )
+    mock_post = AsyncMock(return_value={"messages": [{"id": "wamid.OUT1"}]})
+    monkeypatch.setattr(whatsapp_module, "_post_graph_api", mock_post)
+
+    message, _created = await handlers.send_reply(
+        session, connection.org_id, conversation.id, "u1", "hi", subject="ignored"
+    )
+    processed = await worker.process_outbound_batch(session)
+    assert processed == 1
+
+    await session.refresh(message)
+    assert message.status == "sent"
+    _url, _headers, payload = mock_post.call_args.args
+    assert "subject" not in payload  # WhatsApp's send payload has no such field
 
 
 async def test_send_reply_idempotency_key_replay_does_not_duplicate(

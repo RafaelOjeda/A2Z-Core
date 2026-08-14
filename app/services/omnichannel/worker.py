@@ -40,7 +40,7 @@ from app.core.realtime import publish_update
 from app.core.storage import upload_file
 from app.services.omnichannel import db, metrics, queues, routing
 from app.services.omnichannel.adapters.registry import get_adapter
-from app.services.omnichannel.adapters.types import OutboundContent
+from app.services.omnichannel.adapters.types import DeliveryStatusUpdate, OutboundContent
 from app.services.omnichannel.exceptions import ChannelAdapterError
 from app.services.omnichannel.models import (
     ChannelConnection,
@@ -48,7 +48,19 @@ from app.services.omnichannel.models import (
     Conversation,
     Message,
     MessageAttachment,
+    MessageStatus,
 )
+
+# Ladder a delivery-status update may only move forward along -- Meta does
+# not guarantee webhook delivery order, so a `delivered` arriving after
+# `read` must not regress the row. `failed` is handled separately (§ below):
+# it's a terminal state, not a rung on this ladder.
+_STATUS_RANK: dict[str, int] = {
+    MessageStatus.QUEUED.value: 0,
+    MessageStatus.SENT.value: 1,
+    MessageStatus.DELIVERED.value: 2,
+    MessageStatus.READ.value: 3,
+}
 
 log = get_logger("omnichannel.worker")
 
@@ -85,11 +97,26 @@ async def process_inbound_batch(
 
 
 async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessage) -> None:
+    """Persist any customer messages in this payload, then apply any delivery
+    statuses in it.
+
+    Both parsers run unconditionally on every payload rather than one or the
+    other: a single Meta webhook call can carry customer messages *and*
+    delivery-status updates in the same batch (e.g. WhatsApp's
+    ``value.messages[]`` alongside ``value.statuses[]``), so "try one, fall
+    through to the other" would silently drop whichever arrived second. Every
+    adapter's ``normalize_inbound``/``interpret_delivery_webhook`` pair is a
+    pure dict walk that ignores the shape it doesn't own, so calling both
+    unconditionally is cheap and safe (see ``EmailAdapter.
+    interpret_delivery_webhook``'s shape guard for the one adapter where that
+    needed spelling out explicitly).
+    """
     started = time.perf_counter()
     org_id = msg.attributes["org_id"]
     channel_type = msg.attributes["channel_type"]
     adapter = get_adapter(channel_type)
-    normalized = await adapter.normalize_inbound(msg.body["raw_payload"])
+    raw_payload = msg.body["raw_payload"]
+    normalized = await adapter.normalize_inbound(raw_payload)
 
     for item in normalized:
         identity = await _find_or_create_identity(
@@ -198,6 +225,62 @@ async def _process_inbound_message(session: AsyncSession, msg: queues.QueueMessa
             "omnichannel.inbound.processed",
             extra={"org_id": org_id, "conversation_id": conversation.id, "message_id": message.id},
         )
+
+    delivery_updates = await adapter.interpret_delivery_webhook(raw_payload)
+    for update in delivery_updates:
+        await _apply_delivery_status(session, org_id, channel_type, update)
+
+
+async def _apply_delivery_status(
+    session: AsyncSession, org_id: str, channel_type: str, update: DeliveryStatusUpdate
+) -> None:
+    """Advance one Message's status from a provider delivery-status update.
+
+    Org-scoped lookup on ``(org_id, channel_type, external_message_id)`` --
+    the same tuple ``uq_message_idempotency`` is keyed on. A miss is normal,
+    not an error: Meta retries webhooks aggressively, and a status for a
+    message that predates this feature (or was never persisted) simply has
+    nothing to update.
+
+    Advances monotonically along ``_STATUS_RANK`` (never regresses a
+    ``read`` back to ``delivered`` if statuses arrive out of order) except
+    for ``failed``, which always applies -- it's a terminal outcome, not a
+    rung on the ladder.
+    """
+    stmt = select(Message).where(
+        Message.org_id == org_id,
+        Message.channel_type == channel_type,
+        Message.external_message_id == update.external_message_id,
+    )
+    message = (await session.execute(stmt)).scalar_one_or_none()
+    if message is None:
+        log.info(
+            "omnichannel.delivery_status.unknown_message",
+            extra={"org_id": org_id, "external_message_id": update.external_message_id},
+        )
+        return
+
+    if update.status != MessageStatus.FAILED.value:
+        if _STATUS_RANK.get(update.status, -1) <= _STATUS_RANK.get(message.status, -1):
+            return
+
+    message.status = update.status
+    await session.commit()
+
+    await publish_update(
+        org_id,
+        f"org:{org_id}:conversations",
+        {
+            "type": "message.status",
+            "conversation_id": message.conversation_id,
+            "message_id": message.id,
+            "status": update.status,
+        },
+    )
+    log.info(
+        "omnichannel.delivery_status.applied",
+        extra={"org_id": org_id, "message_id": message.id, "status": update.status},
+    )
 
 
 async def _find_or_create_identity(

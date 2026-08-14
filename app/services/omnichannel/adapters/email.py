@@ -153,10 +153,37 @@ class EmailAdapter:
 
         ``raw_payload`` is ``{"message_id": str, "status": str}`` -- the shape
         a subscriber would build from Core's ``email.bounced`` /
-        ``email.complained`` event details.
+        ``email.complained`` event details. There is no producer wired up to
+        call this with that shape yet (module docstring) -- but the worker
+        (§5.6 Step 4) now calls ``interpret_delivery_webhook`` on *every*
+        inbound payload for every channel, including this one's own
+        ``{"raw_mime": ..., "external_message_id": ...}`` inbound-email
+        payloads. Returning ``[]`` for anything that isn't this method's own
+        shape keeps that dual-parse safe instead of raising ``KeyError`` on a
+        payload built for a different method entirely.
         """
-        status = _DELIVERY_STATUS_MAP.get(raw_payload["status"], "failed")
-        return [DeliveryStatusUpdate(external_message_id=raw_payload["message_id"], status=status)]
+        message_id = raw_payload.get("message_id")
+        raw_status = raw_payload.get("status")
+        if not isinstance(message_id, str) or not isinstance(raw_status, str):
+            return []
+        status = _DELIVERY_STATUS_MAP.get(raw_status, "failed")
+        return [DeliveryStatusUpdate(external_message_id=message_id, status=status)]
+
+
+async def _resolve_raw_mime(raw_payload: dict[str, Any]) -> bytes:
+    """Get MIME bytes out of ``normalize_inbound``'s payload, whichever shape it's in."""
+    if "raw_mime" in raw_payload:
+        raw_mime = raw_payload["raw_mime"]
+        return base64.b64decode(raw_mime) if isinstance(raw_mime, str) else raw_mime
+
+    s3_key = raw_payload.get("s3_key")
+    org_id = raw_payload.get("org_id")
+    if not s3_key or not org_id:
+        raise ChannelAdapterError(
+            "normalize_inbound requires either raw_payload['raw_mime'] or "
+            "raw_payload['s3_key'] + raw_payload['org_id']"
+        )
+    return await download_file(org_id, s3_key)
 
 
 def _extract_body(mime: MimeMessage) -> tuple[str | None, str, list[InboundAttachment]]:

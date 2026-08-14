@@ -161,6 +161,17 @@ async def test_interpret_delivery_webhook_maps_status(core_status: str, expected
     assert updates[0].status == expected
 
 
+async def test_interpret_delivery_webhook_ignores_unrelated_shapes() -> None:
+    """The worker now calls interpret_delivery_webhook on every inbound
+    payload for every channel (§5.6 Step 4 dual-parse), including this
+    adapter's own {"raw_mime", "external_message_id"} inbound-email shape --
+    must return [] rather than KeyError on a shape built for a different
+    method entirely."""
+    mime_shaped = {"raw_mime": b"x", "external_message_id": "1"}
+    assert await adapter.interpret_delivery_webhook(mime_shaped) == []
+    assert await adapter.interpret_delivery_webhook({}) == []
+
+
 def test_email_does_not_require_a_stored_credential() -> None:
     """Email authenticates via the org's verified sending domain, not a
     core.secrets-backed connection credential (connections.py's self-service

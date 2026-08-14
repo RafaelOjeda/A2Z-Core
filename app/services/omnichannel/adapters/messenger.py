@@ -149,8 +149,8 @@ class MessengerPlatformAdapter(MetaGraphAdapter):
         ``DeliveryStatusUpdate``. A ``read`` event is *watermark-only* -- it
         acknowledges every message up to a timestamp, not specific ids -- so
         it can't be mapped to an ``external_message_id`` and is intentionally
-        not emitted here. (As for every channel today, this method is not yet
-        consumed by the worker -- a pre-existing cross-channel gap.)
+        not emitted here (``supported_features.read_receipts=False`` reflects
+        this).
         """
         updates: list[DeliveryStatusUpdate] = []
         for entry in raw_payload.get("entry", []):

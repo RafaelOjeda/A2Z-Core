@@ -90,3 +90,20 @@ decision, just an inherited number — Settings/Billing (a future service, per
 root `CLAUDE.md` §14 "No Billing engine") needs the real shape, and pricing
 is a business call this document can't make on its own. Flagging explicitly
 so it isn't mistaken for settled. Revisit when billing is actually scoped.
+
+## 7. SMS: built, deliberately unregistered
+
+**Default: keep `adapters/sms.py` implemented but out of the registry.**
+The adapter is a complete `ChannelAdapter` over AWS SNS SMS (chosen over
+Twilio to stay AWS-native with no new non-AWS credential to manage — the
+rationale lives in the adapter's own module docstring,
+[`app/services/omnichannel/adapters/sms.py`](../app/services/omnichannel/adapters/sms.py)).
+It is not added to `adapters/registry.py::_REGISTRY`, so
+`GET/POST /v1/omnichannel/.../connections` reject `channel_type="sms"`
+outright — matching the v1 scope decision that SMS is cut (root plan §15,
+channel scope revision). Kept implemented rather than deleted so enabling
+it later is a registry-line change, not a rebuild; see
+[known-issues.md #1](services/omnichannel/known-issues.md) for what
+specifically still blocks flipping it on (constructor shape, missing rate
+limit, unverified AWS payload field names). Revisit once there's a
+customer-driven reason to un-defer SMS.

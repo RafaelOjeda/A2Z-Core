@@ -8,7 +8,8 @@
 `app/services/omnichannel/adapters/sms.py` is a complete `ChannelAdapter`
 implementation (outbound via AWS SNS SMS, inbound normalization, delivery
 webhook parsing) with real logic and a provider decision recorded in
-[`docs/omnichannel-decisions.md`](../../omnichannel-decisions.md). However:
+[`docs/omnichannel-decisions.md` #7](../../omnichannel-decisions.md).
+However:
 
 - It is **not** in `adapters/registry.py::_REGISTRY` — `get_adapter("sms")`
   raises `ChannelAdapterError`.
@@ -18,6 +19,11 @@ webhook parsing) with real logic and a provider decision recorded in
   holds pre-built instances) without either changing its constructor or
   changing the registry to support per-call construction.
 - No `"omnichannel.sms.send"` entry exists in `app/config.py::RATE_LIMITS`.
+- `tests/unit/omnichannel/test_registry.py::test_registry_contents_exact`
+  asserts `_REGISTRY`'s keys are exactly `{email, whatsapp, messenger,
+  instagram}` (2026-08 hardening pass) — this is now a build-breaking test,
+  not just a doc claim, if SMS (or anything else) is ever added without
+  going through the checklist in [adapters.md](adapters.md#extension-points).
 - `models.ChannelType.SMS` exists as an enum value, but no
   `channel_connections` row could ever be created for it through any
   current API path — including the connections CRUD API added in the
@@ -102,8 +108,9 @@ the code — listed here for completeness, not as new findings:
 
 - **Commission attribution** — tables ship, no code consumes them
   (`invoice.paid` has no producer).
-- **Templates** — `templates` table ships, unused; WhatsApp outbound is
-  reply-within-24h, text-only.
+- **Templates** — `templates` table ships, unused; every Meta channel's
+  outbound is reply-within-24h, text-only (not just WhatsApp — see
+  [adapters.md](adapters.md)).
 - **AI features** (Bedrock summaries, suggested replies) — entirely absent,
   cut from scope.
 - **Round-robin / sticky routing** — not implemented (see #2 above).
@@ -118,6 +125,47 @@ the code — listed here for completeness, not as new findings:
   a real metrics backend behind the same `record_*` function names is the
   starting point if this is ever needed again.
 - **Public Inbox API** — deferred, no external consumer demand yet.
+- **Outbound media (agent-sent attachments)** — no adapter sends anything
+  but text; no attachment-upload API exists for replies either.
+- **Inbound media on WhatsApp/Messenger/Instagram** — still a placeholder
+  body, not downloaded (unchanged by item 7 below; see
+  [adapters.md](adapters.md)).
+
+## 7. Delivery statuses, email error-wrapping, connection nondeterminism — RESOLVED 2026-08-14
+
+Three related gaps in the 4 live channels' outbound/delivery paths,
+closed in the same hardening pass:
+
+- **Delivery statuses were never applied.** Every adapter implemented
+  `interpret_delivery_webhook`, but nothing called it — no message ever
+  advanced past `sent`; `MessageStatus.DELIVERED`/`READ` were unreachable
+  in production. The worker now calls it unconditionally alongside
+  `normalize_inbound` on every inbound payload and applies updates
+  monotonically. See [message flow: delivery status updates](message-flow.md#delivery-status-updates).
+- **Email send failures escaped the retry path.** `core.email.send_email`
+  raises `core.exceptions.CoreError` subclasses (`SuppressionListError`,
+  `RateLimitError`, ...), which are not `ChannelAdapterError` — they
+  escaped `worker.py`'s `except ChannelAdapterError` entirely instead of
+  following the normal redeliver/mark-failed path. `EmailAdapter.send_outbound`
+  now wraps them.
+- **`_find_connection` was nondeterministic** (`.first()` with no filter or
+  order) and could select a *disabled* connection for an outbound send. Now
+  filters to `status == "active"` and orders by `created_at`
+  (oldest-active-wins); an org with 2+ active connections on one channel
+  still doesn't get per-conversation pinning — that's a separate, deliberate
+  deferral, not a bug this pass claims to fix.
+
+Also corrected in the same pass: `MessengerPlatformAdapter.supported_features.read_receipts`
+was `True` despite the adapter structurally being unable to emit read
+updates (Messenger's `read` webhook event is watermark-only, no
+per-message id) — now `False`, matching WhatsApp's honest `True` (WhatsApp's
+status webhook *does* carry per-message read events). Graph API response
+parsing (`whatsapp.py`/`messenger.py`) also gained a guard against a
+malformed 2xx body raising an unhandled `KeyError`/`IndexError` instead of
+`ChannelAdapterError`.
+
+None of this changed which channels are registered or what media
+capabilities exist — see item 6 above, unchanged by this pass.
 
 ## What this means for anyone extending the service
 

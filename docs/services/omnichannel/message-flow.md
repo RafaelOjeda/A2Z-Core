@@ -118,11 +118,11 @@ sequenceDiagram
     Router-->>Agent: 200 {message_id, status: "queued"}
 
     Worker->>SQSOut: receive_outbound()
-    Worker->>PG: load Message, Conversation, ChannelIdentity, ChannelConnection
+    Worker->>PG: load Message, Conversation, ChannelIdentity, ChannelConnection (oldest-active connection for the channel)
     alt any missing
         Worker->>SQSOut: delete (unrecoverable -- nothing to retry)
     else
-        opt channel_type != "email"
+        opt adapter.supported_features.requires_credentials
             Worker->>Secrets: get_secret(org_id, "omnichannel", credentials_secret_key)
         end
         Worker->>Adapter: send_outbound(to, content, credentials)
@@ -154,6 +154,69 @@ SQS's own redrive policy moves it to the DLQ once `receive_count` exceeds
 `RedrivePolicy` (`aws_resources.py::create_queues`,
 `scripts/create_local_resources.py`) and the worker's own give-up check —
 two independent constants would drift and desync those facts.
+
+### Connection selection is deterministic
+
+`worker.py::_find_connection` resolves the org's connection for a channel
+with `status == "active"` ordered by `created_at` (oldest-active-wins) --
+previously an unordered `.first()`, which could nondeterministically pick a
+*disabled* connection and send through it. There is still no per-conversation
+connection pinning (an org with two active connections on the same channel
+gets the older one for every send); that's a deliberate deferral, not this
+fix's scope.
+
+### Every channel's send failures follow the same retry path
+
+Every adapter's `send_outbound` raises `ChannelAdapterError` on failure --
+including email, which wraps whatever `core.email.send_email` raises
+(`SuppressionListError`, `RateLimitError`, `InvalidAddressError`, all
+`core.exceptions.CoreError` subclasses) instead of letting it propagate
+unrecognized. Before this, an email send failure escaped
+`_process_outbound_message`'s `except ChannelAdapterError` entirely and
+never reached the mark-failed path.
+
+## Delivery status updates
+
+Every adapter implements `interpret_delivery_webhook`; the worker calls it
+on **every** inbound webhook payload, unconditionally, right after the
+`normalize_inbound` loop:
+
+```python
+delivery_updates = await adapter.interpret_delivery_webhook(raw_payload)
+for update in delivery_updates:
+    await _apply_delivery_status(session, org_id, channel_type, update)
+```
+
+**Why unconditional, not "try normalize, fall back to delivery status":** a
+single Meta webhook call can carry customer messages *and* delivery
+statuses in the same body (WhatsApp's `value.messages[]` alongside
+`value.statuses[]`), so it's not an either/or choice. Both parsers are pure,
+side-effect-free dict walks over the same payload -- `normalize_inbound`
+already ignores keys it doesn't recognize (WhatsApp skips `statuses[]`,
+Messenger/Instagram skip non-`message` events), and `interpret_delivery_webhook`
+returns `[]` for a payload that isn't its shape (email's implementation was
+fixed to do this instead of raising `KeyError`) -- so calling both against
+every payload is always safe, and keeps the worker from needing any
+channel-specific payload-shape inspection.
+
+`_apply_delivery_status` looks up the target `Message` by
+`(org_id, channel_type, external_message_id)` -- org-scoped, so a status
+update can never touch another org's message even if two orgs' connections
+happen to reuse the same provider message id. An unresolvable id is logged
+and skipped (normal for a retried webhook or a message that predates this
+feature, not an error). Status advances **monotonically** along
+`queued < sent < delivered < read` and never regresses -- Meta's status
+webhooks aren't guaranteed to arrive in order -- except `failed`, which
+always applies regardless of the current status. Applying an update
+publishes a `realtime.publish_update(org:{org_id}:conversations, {"type":
+"message.status", ...})` so an agent's screen reflects delivery/read ticks;
+there is deliberately no new EventBridge event for this (`message.delivered`
+would be a contract with zero current consumers -- straightforward to add
+later if one shows up).
+
+Messenger/Instagram's `read` events remain intentionally unemitted (they're
+watermark-only, with no per-message id to attach a status to) --
+`supported_features.read_receipts=False` reflects this accurately for both.
 
 ## Cross-service events
 
@@ -190,7 +253,12 @@ alarms this feeds (not yet wired — needs a real AWS account).
 ## Known limitations
 
 - Outbound media (agent-sent attachments) is modeled in
-  `OutboundContent.attachments`, but the WhatsApp adapter only sends text
-  today (see [adapters.md](adapters.md)).
+  `OutboundContent.attachments`, but **every** channel's adapter sends
+  text-only today (see [adapters.md](adapters.md)) — not just WhatsApp.
+  There is also no attachment-upload API for agent replies (`SendReplyRequest`
+  is `body_text`/`subject` only).
+- Inbound media on WhatsApp/Messenger/Instagram is recorded with a
+  placeholder body, not downloaded — a deliberate, documented v1 gap (see
+  [adapters.md](adapters.md)), unchanged by this round of hardening.
 - No batching of outbound rate-limit checks — one `check_and_increment`
   call per message.

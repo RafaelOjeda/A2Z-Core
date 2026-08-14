@@ -47,15 +47,32 @@ connection's `core.secrets` bundle.
 Register a channel connection (Owner/Admin only, API review 2026-07-18 —
 previously there was no API path to create one at all). Body:
 `{"channel_type": str, "display_name": str, "provider_account_id": str,
-"credentials_secret_key": str}`. `credentials_secret_key` is a *reference*
-into `core.secrets` (`a2z/{org_id}/omnichannel/{key}`) — never a raw
-credential; the secret itself must already exist (provisioned out of band).
+"credentials": dict | null, "credentials_secret_key": str | null}`.
+
+For a channel whose adapter `requires_credentials` (every registered
+channel except email), pass **exactly one** of:
+- `credentials` — raw values just submitted by the user (e.g. WhatsApp's
+  `access_token`/`phone_number_id`/`app_secret`), the self-service path.
+  Written to `core.secrets` under a key derived from the new connection's
+  own id — never a caller-supplied key, so two connections can't collide.
+- `credentials_secret_key` — a *reference* into `core.secrets`
+  (`a2z/{org_id}/omnichannel/{key}`) an engineer already provisioned out of
+  band. `404 SecretNotFoundError` if it doesn't resolve.
+
+Passing both, or neither, is `400 ConnectionValidationError`.
+
+Email (`requires_credentials=False`) ignores both fields entirely —
+`provider_account_id` must instead be an `address@domain` string;
+`400 ConnectionValidationError` otherwise. The domain to its right is
+verified via `core.email.start_domain_verification`, kicked off as part of
+this call, and the response includes `dns_records` (the records the org
+must add to finish verification) — `null` for every other channel.
+
 Returns `201` + a `ConnectionView` (never includes the resolved secret
 value, only the reference key). `400 ConnectionValidationError` if
 `channel_type` has no registered adapter (e.g. `"sms"` — a full adapter
 exists but is deliberately unregistered, see
-[known limitations](known-issues.md)). `404 SecretNotFoundError` if the
-secret key doesn't resolve.
+[known limitations](known-issues.md)).
 
 ### `GET /v1/omnichannel/orgs/{org_id}/connections`
 
@@ -129,10 +146,13 @@ silently clear an agent's unread badge. Returns
 
 ### `POST /v1/omnichannel/orgs/{org_id}/conversations/{conversation_id}/messages`
 
-Send an agent's reply. Body: `{"body_text": str}`. Requires membership and
-role ≠ GUEST/Viewer. Persists as `"queued"` and enqueues for the worker —
-does **not** wait for the actual channel send. Returns `201` +
-`{"message_id": str, "status": "queued"}`.
+Send an agent's reply. Body: `{"body_text": str, "subject": str | None}`.
+`subject` is optional and meaningful for email only — other channels store
+it on the `Message` row but never send it (the router stays channel-agnostic
+rather than validating per channel; see [adapters.md](adapters.md#email-adapter-adaptersemailpy)).
+Requires membership and role ≠ GUEST/Viewer. Persists as `"queued"` and
+enqueues for the worker — does **not** wait for the actual channel send.
+Returns `201` + `{"message_id": str, "status": "queued"}`.
 
 **Idempotency** (API review, 2026-07-18): an optional `Idempotency-Key`
 header. Retrying the same request with the same key returns the *original*

@@ -28,7 +28,7 @@ flowchart LR
 | Doc | Covers |
 |---|---|
 | [`data-model.md`](data-model.md) | Postgres schema, ERD, migrations, SQS provisioning |
-| [`adapters.md`](adapters.md) | The `ChannelAdapter` contract; email, WhatsApp, SMS adapters |
+| [`adapters.md`](adapters.md) | The `ChannelAdapter` contract; email, WhatsApp, Messenger, Instagram adapters (plus SMS, built but unregistered) |
 | [`message-flow.md`](message-flow.md) | Inbound/outbound pipeline, webhook handling, the worker, idempotency |
 | [`routing-and-realtime.md`](routing-and-realtime.md) | Claim/reassign/single-assignee, presence, SSE realtime inbox |
 | [`api-reference.md`](api-reference.md) | Every HTTP endpoint this service mounts |
@@ -38,7 +38,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph API["API process (app/routers/omnichannel.py)"]
+    subgraph API["FastAPI routes (app/routers/omnichannel.py)"]
         Webhook["POST /webhooks/{channel_type}/{connection_id}"]
         Inbox["GET conversations / conversation / read"]
         Reply["POST .../messages (send_reply)"]
@@ -50,16 +50,17 @@ flowchart TB
         Handlers["handlers.py\n(send_reply)"]
         Inbox_py["inbox.py\n(reads)"]
         Routing["routing.py\n(claim/reassign/single-assignee)"]
-        Presence["presence.py"]
         Stream_py["stream.py\n(SSE relay)"]
     end
-    subgraph WorkerProc["Worker process (worker.py)"]
-        InboundProc["process_inbound_batch"]
+    subgraph WorkerTask["worker.py -- FastAPI lifespan background task,\nsame process, not a separate one (single-box MVP)"]
+        InboundProc["process_inbound_batch\n(also applies delivery-status updates)"]
         OutboundProc["process_outbound_batch"]
     end
     subgraph Adapters["adapters/ (registry.py dispatches)"]
         EmailA["email.py"]
         WhatsAppA["whatsapp.py"]
+        MessengerA["messenger.py"]
+        InstagramA["instagram.py"]
         SmsA["sms.py (built, not registered)"]
     end
     Webhook --> Webhooks_py --> SQSIn[("SQS inbound")]
@@ -69,7 +70,6 @@ flowchart TB
     Inbox --> Inbox_py
     Assign --> Routing
     Stream --> Stream_py
-    Routing --> Presence
 ```
 
 ## Public interfaces
@@ -83,9 +83,10 @@ flowchart TB
   Invoicing exists) `invoice.paid`. See
   [event-driven architecture](../../architecture/event-driven-architecture.md)
   and [`docs/events.md`](../../events.md).
-- **Worker process** — same container image, different entrypoint
-  (`worker.py`'s `process_inbound_batch`/`process_outbound_batch` run in a
-  loop); see [message flow](message-flow.md).
+- **Worker** — `worker.py`'s `process_inbound_batch`/`process_outbound_batch`
+  run in a loop as a FastAPI lifespan background task in the *same* process
+  as the API (single-box MVP, gated on `RUN_OMNICHANNEL_WORKER`) — not a
+  separate container or entrypoint; see [message flow](message-flow.md).
 
 ## Configuration
 
@@ -133,8 +134,9 @@ the same global handler as every Core error (see
 - Every table carries `org_id`; every query filters on it — see
   [data flow](../../architecture/data-flow.md#the-org-scoping-invariant).
 - Inbound webhooks are signature-verified before anything else runs (HMAC
-  for WhatsApp; a documented no-op for email, which never receives an HTTP
-  webhook in the first place).
+  for every Meta channel — WhatsApp, Messenger, Instagram; a documented
+  no-op for email, which never receives an HTTP webhook in the first
+  place).
 - The role model gap between this service's product roles
   (Owner/Admin/Agent/Viewer) and Core's `Role` enum
   (OWNER/ADMIN/MEMBER/GUEST) is explicit and consistently mapped — see
@@ -152,16 +154,22 @@ conversation → agent sees it via
 ## Common extension points
 
 Adding a new channel is, by design, the smallest change this service
-supports: one new file in `adapters/` implementing `ChannelAdapter`, one
-line in `adapters/registry.py`. See [`adapters.md`](adapters.md) for the
-three invariants that keep this true (`channel_type` as `TEXT`, one generic
-webhook route, one shared SQS queue pair).
+supports: a new file in `adapters/` implementing `ChannelAdapter`
+(including `signing_secret_key`), one line in `adapters/registry.py`, one
+`ChannelType` enum member, and (usually) one `RATE_LIMITS` entry. See
+[`adapters.md`](adapters.md#extension-points) for the full checklist and
+the three invariants that keep the rest of the system (`worker.py`,
+`webhooks.py`, `connections.py`, routing, storage, infra) untouched —
+credential and signing-secret handling are capability-driven
+(`supported_features.requires_credentials`, `signing_secret_key`), not
+channel-name checks.
 
 ## Known limitations
 
 See [`known-issues.md`](known-issues.md) for the full list — notably: SMS
-has a working adapter that isn't registered; presence/round-robin routing
-described as "deferred" in the design doc is partly implemented; commission
-attribution and AI features are genuinely not built; and there's an
-orphaned duplicate migration file that would make `alembic upgrade head`
-ambiguous against a fresh database.
+has a working adapter that isn't registered; commission attribution and AI
+features are genuinely not built; outbound media/attachments aren't
+supported on any channel, and inbound media on WhatsApp/Messenger/Instagram
+is a placeholder, not downloaded; and there's no tested Postgres
+backup/restore procedure yet (the single highest-risk item before a real
+production launch).

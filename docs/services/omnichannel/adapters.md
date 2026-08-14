@@ -17,6 +17,7 @@ cross-cutting one.
 @runtime_checkable
 class ChannelAdapter(Protocol):
     supported_features: SupportedFeatures
+    signing_secret_key: str
 
     async def verify_inbound_signature(self, raw_body: bytes, headers: dict[str, str], secret: str) -> bool: ...
     async def verify_subscription(self, params: dict[str, str], credentials: dict[str, Any]) -> str: ...
@@ -24,6 +25,14 @@ class ChannelAdapter(Protocol):
     async def send_outbound(self, to: str, content: OutboundContent, credentials: dict[str, Any]) -> SendResult: ...
     async def interpret_delivery_webhook(self, raw_payload: dict[str, Any]) -> list[DeliveryStatusUpdate]: ...
 ```
+
+`signing_secret_key` names the field in the connection's `core.secrets`
+bundle that `verify_inbound_signature` checks against — `"app_secret"` for
+every Meta channel, `""` for email and SMS (both no-op signature checks, see
+below). `webhooks.py::handle_webhook` reads
+`secret_bundle.get(adapter.signing_secret_key, "")` generically; a new
+channel with a differently-named signing secret sets this attribute instead
+of the generic webhook layer growing a channel-specific branch.
 
 Shared Pydantic types (`adapters/types.py`): `SupportedFeatures` (templates,
 rich_media, typing_indicators, read_receipts — callers branch on
@@ -88,6 +97,12 @@ and the three shape-specific methods (`normalize_inbound`, `send_outbound`,
 implement those, so a leaf that forgets one fails the registry's
 `isinstance(..., ChannelAdapter)` Protocol guard loudly.
 
+The Graph API version is pinned in exactly one place —
+`adapters/_meta.py::GRAPH_API_BASE` — and every Meta leaf's send call
+builds its URL from it, so bumping the version is a one-line change with no
+per-channel follow-up. Not documented elsewhere in this tree; check that
+constant, not this page, for the version currently in use.
+
 ## Email adapter (`adapters/email.py`)
 
 Built first because it validates the pattern with the least new surface —
@@ -95,12 +110,12 @@ outbound reuses `core.email.send_email` almost entirely.
 
 | Method | Behavior |
 |---|---|
-| `verify_inbound_signature` | Always `True` — inbound email never arrives via the generic webhook route (it's SES receipt rule → S3 → the shared inbound SQS queue), so there is no HTTP signature to check. This is a documented no-op, not a shortcut. |
-| `normalize_inbound` | Parses raw MIME (`raw_payload = {"raw_mime": bytes, "external_message_id": str}`) via stdlib `email`, extracting the text/HTML body and any attachments |
-| `send_outbound` | Calls `core.email.send_email(org_id, ServiceType.OMNICHANNEL, ...)` — **never boto3 SES directly**. `credentials` carries only `org_id` (email has no per-org channel secret) |
-| `interpret_delivery_webhook` | Maps `{"message_id", "status"}` (built by a future subscriber from Core's `email.bounced`/`email.complained` events) to `DeliveryStatusUpdate`. Not invoked by an actual per-channel webhook today — Core's own SES/SNS Lambda already handles bounces/complaints independently |
+| `verify_inbound_signature` | Always `True` — inbound email never arrives via the generic webhook route (it's SES receipt rule → S3 → the shared inbound SQS queue), so there is no HTTP signature to check. This is a documented no-op, not a shortcut. `signing_secret_key = ""`. |
+| `normalize_inbound` | Accepts **either** `{"raw_mime": bytes, "external_message_id": str}` (unit-test shape) **or** `{"s3_key": str, "org_id": str, "external_message_id": str}` — the production shape, since SQS JSON can't carry MIME bytes. The `s3_key` branch fetches the object via `core.storage.download_file` before parsing, so the worker stays 100% channel-agnostic. Parses via stdlib `email`, extracting the text/HTML body and any attachments |
+| `send_outbound` | Calls `core.email.send_email(org_id, ServiceType.OMNICHANNEL, ...)` — **never boto3 SES directly**. Wraps any `core.exceptions.CoreError` (suppression, rate limit, invalid address) as `ChannelAdapterError`, so an email send failure follows the same retry/mark-failed path as every other channel instead of escaping the worker's handler unrecognized. `credentials` carries only `org_id` (email has no per-org channel secret) |
+| `interpret_delivery_webhook` | Maps `{"message_id", "status"}` (built by a future subscriber from Core's `email.bounced`/`email.complained` events) to `DeliveryStatusUpdate`; returns `[]` for any payload that isn't this shape (including inbound-MIME payloads), so the worker's unconditional per-message call is always safe. No producer feeds this shape today — Core's own SES/SNS route already handles bounces/complaints independently |
 
-`supported_features = SupportedFeatures(rich_media=True)`.
+`supported_features = SupportedFeatures(rich_media=True, requires_credentials=False)`.
 
 ## WhatsApp adapter (`adapters/whatsapp.py`)
 
@@ -109,9 +124,9 @@ Meta WhatsApp Cloud (Graph) API over `httpx`.
 | Method | Behavior |
 |---|---|
 | `verify_inbound_signature` | HMAC-SHA256 of the raw body against the connection's `app_secret`, compared to the `X-Hub-Signature-256` header via `hmac.compare_digest` (timing-safe) |
-| `normalize_inbound` | Flattens Meta's nested `entry[].changes[].value.{messages[],contacts[]}` batch shape into one `NormalizedInboundMessage` per message |
-| `send_outbound` | Requires `org_id`, `access_token`, `phone_number_id` in `credentials` (caller resolves via `core.secrets.get_secret` first). **Text-only** — raises `ChannelAdapterError` if `content.body_text` is empty |
-| `interpret_delivery_webhook` | Maps Meta's `sent`/`delivered`/`read`/`failed` status webhook directly — no remapping needed, unlike email |
+| `normalize_inbound` | Flattens Meta's nested `entry[].changes[].value.{messages[],contacts[]}` batch shape into one `NormalizedInboundMessage` per message. Naturally ignores `value.statuses[]` — those are `interpret_delivery_webhook`'s payload, and both methods run against every inbound webhook body (see [message flow](message-flow.md#delivery-status-updates)) |
+| `send_outbound` | Requires `org_id`, `access_token`, `phone_number_id` in `credentials` (caller resolves via `core.secrets.get_secret` first). **Text-only** — raises `ChannelAdapterError` if `content.body_text` is empty. The Graph API response's `messages[0].id` is extracted defensively — a malformed 2xx body raises `ChannelAdapterError` rather than an unhandled `KeyError`/`IndexError` |
+| `interpret_delivery_webhook` | Maps Meta's `sent`/`delivered`/`read`/`failed` status webhook directly — no remapping needed, unlike email. The worker applies these monotonically (`queued < sent < delivered < read`, never regressing) since Meta's status callbacks can arrive out of order |
 
 `supported_features = SupportedFeatures(templates=False, rich_media=False, typing_indicators=False, read_receipts=True)`.
 
@@ -143,10 +158,14 @@ supplies the Messenger-Platform payload shapes. Instagram DMs run on the
 | `verify_inbound_signature` | Inherited — `X-Hub-Signature-256` HMAC-SHA256 against the connection's `app_secret` |
 | `verify_subscription` | Inherited — echoes Meta's `hub.challenge` when `hub.verify_token` matches the stored `verify_token` |
 | `normalize_inbound` | Walks `entry[].messaging[]`; emits **one message per genuine customer message only** — delivery receipts, read receipts, and echoes of the page's own outbound (`message.is_echo`) are skipped. `external_id = sender.id` (PSID), `external_message_id = message.mid` |
-| `send_outbound` | Requires `org_id`, `page_access_token`, `page_id` in `credentials`. POSTs `{"messaging_type":"RESPONSE","recipient":{"id":to},"message":{"text":...}}` to `/{page_id}/messages`. **Text-only** — raises if `content.body_text` is empty |
-| `interpret_delivery_webhook` | Maps each id in a `delivery.mids[]` event to a `delivered` update; a `read` event is watermark-only (no per-message id) and is intentionally not emitted |
+| `send_outbound` | Requires `org_id`, `page_access_token`, `page_id` in `credentials`. POSTs `{"messaging_type":"RESPONSE","recipient":{"id":to},"message":{"text":...}}` to `/{page_id}/messages`. **Text-only** — raises if `content.body_text` is empty. `data["message_id"]` is extracted defensively, same guard as WhatsApp's `messages[0].id` |
+| `interpret_delivery_webhook` | Maps each id in a `delivery.mids[]` event to a `delivered` update; a `read` event is watermark-only (no per-message id) and is **intentionally never emitted** — that's why `read_receipts=False` below, not a gap |
 
-`supported_features = SupportedFeatures(templates=False, rich_media=False, typing_indicators=False, read_receipts=True, requires_credentials=True)`.
+`supported_features = SupportedFeatures(templates=False, rich_media=False, typing_indicators=False, read_receipts=False, requires_credentials=True)`.
+`read_receipts` was corrected from `True` to `False` — the flag exists so
+callers can branch on capability, and this adapter structurally cannot
+report reads (see the row above), so the old value was inaccurate rather
+than aspirational.
 
 **The `messaging[]` array is why `normalize_inbound` must filter.** Unlike
 WhatsApp (which separates customer messages from delivery statuses into
@@ -177,7 +196,8 @@ media / no-sender-name gaps — is inherited unchanged.
 
 Outbound via AWS SNS SMS (a provider decision recorded in
 [`docs/omnichannel-decisions.md`](../../omnichannel-decisions.md) — AWS SNS
-over Twilio, to stay AWS-native with no new non-AWS credential to manage).
+over Twilio, to stay AWS-native with no new non-AWS credential to manage;
+see decision #7 there for why the adapter is nonetheless unregistered).
 
 | Method | Behavior |
 |---|---|
@@ -233,10 +253,35 @@ messages = await adapter.normalize_inbound(payload)
 
 ## Extension points
 
-Add a channel: create `adapters/{channel}.py` implementing `ChannelAdapter`,
-add one line to `_REGISTRY` in `adapters/registry.py`. Nothing else in the
-system (routing, storage, infra) needs to change — see the three invariants
-above.
+Adding a channel:
+
+1. **`adapters/{channel}.py`** implementing `ChannelAdapter` — including
+   `signing_secret_key` (see the contract above) and an honest
+   `supported_features` (don't set a capability flag `True` unless the
+   method beside it can actually produce that outcome — the Messenger
+   `read_receipts` correction above is the cautionary example).
+2. **One line in `_REGISTRY`** (`adapters/registry.py`).
+3. **One `ChannelType` enum member** (`models.py`) — app-layer only, the
+   Postgres column stays `TEXT` (invariant #1 above), so this is not a
+   migration.
+4. **One `RATE_LIMITS["omnichannel.{channel}.send"]` entry** (`app/config.py`)
+   if the channel has its own provider-side rate ceiling (skip for a
+   channel like email that enforces its own limit inside Core) —
+   `test_registry.py`'s completeness test fails the build if a
+   `requires_credentials` channel is missing this.
+5. **Unit tests** for every contract method, plus **one end-to-end
+   integration test** (webhook → SQS → worker → persist, mirroring
+   `test_message_flow_meta.py`).
+
+Nothing else in the system — `worker.py`, `webhooks.py`, `connections.py`,
+routing, storage, infra — needs to change for a channel that fits the
+Protocol as-is: credential handling is driven by
+`supported_features.requires_credentials`, not a channel-name check, and
+signature-secret lookup is driven by `signing_secret_key`, not a hardcoded
+key name. (The one channel that still gets a real `if` in `connections.py`
+is email specifically, for its SES domain-verification side effect — see
+that module's docstring — not a template for credential-free channels in
+general.) See the three invariants above for the rest.
 
 ## Known limitations
 

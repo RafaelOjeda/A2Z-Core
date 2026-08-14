@@ -35,6 +35,7 @@ import httpx
 from app.services.omnichannel.adapters._meta import (
     GRAPH_API_BASE,
     MetaGraphAdapter,
+    extract_send_id,
 )
 from app.services.omnichannel.adapters._meta import (
     post_graph_api as _post_graph_api,
@@ -121,7 +122,7 @@ class WhatsAppAdapter(MetaGraphAdapter):
         except httpx.HTTPError as exc:
             raise ChannelAdapterError(f"WhatsApp send failed: {exc}") from exc
 
-        message_id: str = data["messages"][0]["id"]
+        message_id = extract_send_id(data, "messages", 0, "id", channel="WhatsApp")
         return SendResult(external_message_id=message_id, status="sent")
 
     async def interpret_delivery_webhook(

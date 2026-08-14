@@ -22,11 +22,14 @@ correct, not a shortcut:
 
 from __future__ import annotations
 
+import base64
 from email import message_from_bytes
 from email.message import Message as MimeMessage
 from typing import Any
 
 from app.core.email import ServiceType, send_email
+from app.core.exceptions import CoreError
+from app.core.storage import download_file
 from app.services.omnichannel.adapters.types import (
     DeliveryStatusUpdate,
     InboundAttachment,
@@ -51,6 +54,8 @@ class EmailAdapter:
     """Adapts ``core.email`` to the ``ChannelAdapter`` Protocol (§5.2, §7)."""
 
     supported_features = SupportedFeatures(rich_media=True, requires_credentials=False)
+    # No webhook to sign (see verify_inbound_signature below).
+    signing_secret_key = ""
 
     async def verify_inbound_signature(
         self, raw_body: bytes, headers: dict[str, str], secret: str
@@ -105,24 +110,38 @@ class EmailAdapter:
         that need them, e.g. WhatsApp's ``core.secrets.get_secret`` result) so
         every adapter can rely on the same key without widening the Protocol
         signature to add an explicit ``org_id`` parameter.
+
+        Raises:
+            ChannelAdapterError: ``credentials['org_id']`` is missing, or
+                ``send_email`` raised any ``CoreError`` (suppression,
+                over-limit, invalid address, ...). Core's own error keeps its
+                message but is re-raised as ``ChannelAdapterError`` so it
+                follows the same worker retry/mark-failed path as every other
+                channel's send failure (``worker.py``'s
+                ``except ChannelAdapterError`` -- a bare ``CoreError`` would
+                escape that handler entirely).
         """
         org_id = credentials.get("org_id")
         if not org_id:
             raise ChannelAdapterError("send_outbound requires credentials['org_id']")
 
-        result = await send_email(
-            org_id,
-            ServiceType.OMNICHANNEL,
-            to,
-            subject=content.subject or "",
-            body_html=content.body_html or content.body_text or "",
-            body_text=content.body_text,
-            attachments=[
-                {"filename": a.filename, "content": a.content, "mime_type": a.content_type}
-                for a in content.attachments
-            ]
-            or None,
-        )
+        try:
+            result = await send_email(
+                org_id,
+                ServiceType.OMNICHANNEL,
+                to,
+                subject=content.subject or "",
+                body_html=content.body_html or content.body_text or "",
+                body_text=content.body_text,
+                attachments=[
+                    {"filename": a.filename, "content": a.content, "mime_type": a.content_type}
+                    for a in content.attachments
+                ]
+                or None,
+            )
+        except CoreError as exc:
+            raise ChannelAdapterError(f"email send failed: {exc}") from exc
+
         return SendResult(
             external_message_id=result.external_message_id, status=result.status.value
         )

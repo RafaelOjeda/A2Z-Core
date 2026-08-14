@@ -7,6 +7,7 @@ plumbing, which already has its own suite.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -15,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core.email import EmailResult, EmailStatus
+from app.core.exceptions import RateLimitError, SuppressionListError
 from app.services.omnichannel.adapters import email as email_adapter_module
 from app.services.omnichannel.adapters.email import EmailAdapter
 from app.services.omnichannel.adapters.types import OutboundAttachment, OutboundContent
@@ -74,6 +76,28 @@ async def test_send_outbound_requires_org_id(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(ChannelAdapterError):
         await adapter.send_outbound("customer@example.com", OutboundContent(body_text="hi"), {})
     mock_send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "core_exc",
+    [
+        SuppressionListError("customer@example.com is suppressed"),
+        RateLimitError("email.send over limit", retry_after=30),
+    ],
+)
+async def test_send_outbound_wraps_core_errors(
+    monkeypatch: pytest.MonkeyPatch, core_exc: Exception
+) -> None:
+    """A CoreError from send_email must surface as ChannelAdapterError so it
+    follows the worker's normal retry/mark-failed path (worker.py's
+    `except ChannelAdapterError`) instead of escaping unhandled."""
+    mock_send = AsyncMock(side_effect=core_exc)
+    monkeypatch.setattr(email_adapter_module, "send_email", mock_send)
+
+    with pytest.raises(ChannelAdapterError):
+        await adapter.send_outbound(
+            "customer@example.com", OutboundContent(body_text="hi"), {"org_id": "org-a"}
+        )
 
 
 async def test_verify_inbound_signature_always_true() -> None:

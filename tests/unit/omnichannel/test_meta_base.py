@@ -12,9 +12,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 
+import httpx
 import pytest
 
-from app.services.omnichannel.adapters._meta import MetaGraphAdapter
+from app.services.omnichannel.adapters._meta import (
+    MetaGraphAdapter,
+    extract_send_id,
+    post_graph_api,
+)
 from app.services.omnichannel.adapters.instagram import InstagramAdapter
 from app.services.omnichannel.adapters.messenger import MessengerAdapter
 from app.services.omnichannel.adapters.whatsapp import WhatsAppAdapter
@@ -95,3 +100,59 @@ def test_all_meta_leaves_inherit_the_base() -> None:
 def test_every_meta_leaf_shares_the_signing_secret_key() -> None:
     assert WhatsAppAdapter().signing_secret_key == "app_secret"
     assert MessengerAdapter().signing_secret_key == "app_secret"
+    assert InstagramAdapter().signing_secret_key == "app_secret"
+
+
+_RealAsyncClient = httpx.AsyncClient
+
+
+def _mock_client_factory(response: httpx.Response) -> object:
+    """A stand-in for ``httpx.AsyncClient(timeout=...)`` that always answers
+    with ``response``, via the real client's own MockTransport support --
+    must go through ``_RealAsyncClient`` (captured before any monkeypatch),
+    since ``_meta`` and this test module share the same ``httpx`` module
+    object: patching ``httpx.AsyncClient`` anywhere patches it everywhere."""
+
+    def _factory(**_kwargs: object) -> httpx.AsyncClient:
+        return _RealAsyncClient(transport=httpx.MockTransport(lambda _request: response))
+
+    return _factory
+
+
+async def test_post_graph_api_raises_for_non_2xx(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("POST", "https://graph.facebook.com/v20.0/123/messages")
+    response = httpx.Response(400, request=request, json={"error": "bad"})
+    monkeypatch.setattr(
+        "app.services.omnichannel.adapters._meta.httpx.AsyncClient",
+        _mock_client_factory(response),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await post_graph_api("https://graph.facebook.com/v20.0/123/messages", {}, {})
+
+
+async def test_post_graph_api_returns_json_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("POST", "https://graph.facebook.com/v20.0/123/messages")
+    response = httpx.Response(200, request=request, json={"messages": [{"id": "wamid.1"}]})
+    monkeypatch.setattr(
+        "app.services.omnichannel.adapters._meta.httpx.AsyncClient",
+        _mock_client_factory(response),
+    )
+    data = await post_graph_api("https://graph.facebook.com/v20.0/123/messages", {}, {})
+    assert data == {"messages": [{"id": "wamid.1"}]}
+
+
+def test_extract_send_id_success() -> None:
+    assert (
+        extract_send_id({"messages": [{"id": "wamid.1"}]}, "messages", 0, "id", channel="X")
+        == "wamid.1"
+    )
+    assert extract_send_id({"message_id": "m.1"}, "message_id", channel="X") == "m.1"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [{}, {"messages": []}, {"messages": [{}]}, {"messages": [{"id": 123}]}],
+)
+def test_extract_send_id_rejects_malformed_shapes(data: dict[str, object]) -> None:
+    with pytest.raises(ChannelAdapterError):
+        extract_send_id(data, "messages", 0, "id", channel="X")

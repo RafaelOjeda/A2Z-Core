@@ -167,6 +167,19 @@ async def test_send_outbound_wraps_http_error(monkeypatch: pytest.MonkeyPatch) -
         await adapter.send_outbound("USER1", OutboundContent(body_text="hi"), credentials)
 
 
+@pytest.mark.parametrize("bad_response", [{}, {"recipient_id": "USER1"}])
+async def test_send_outbound_rejects_malformed_response(
+    monkeypatch: pytest.MonkeyPatch, bad_response: dict[str, object]
+) -> None:
+    """Same guard as WhatsApp's -- see adapters/_meta.py::extract_send_id."""
+    mock_post = AsyncMock(return_value=bad_response)
+    monkeypatch.setattr(messenger_module, "_post_graph_api", mock_post)
+
+    credentials = {"org_id": "org-a", "page_access_token": "tok", "page_id": "PAGE123"}
+    with pytest.raises(ChannelAdapterError):
+        await adapter.send_outbound("USER1", OutboundContent(body_text="hi"), credentials)
+
+
 async def test_interpret_delivery_webhook_maps_mids() -> None:
     payload = {
         "entry": [
@@ -195,3 +208,9 @@ async def test_interpret_delivery_webhook_maps_mids() -> None:
 def test_messenger_requires_a_stored_credential() -> None:
     """connections.py's self-service branch relies on this default staying True."""
     assert adapter.supported_features.requires_credentials is True
+
+
+def test_messenger_read_receipts_is_false() -> None:
+    """interpret_delivery_webhook can only ever emit "delivered" (watermark-only
+    `read` events are dropped above), so the feature flag must say so too."""
+    assert adapter.supported_features.read_receipts is False

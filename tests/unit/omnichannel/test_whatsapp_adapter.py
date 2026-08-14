@@ -195,6 +195,21 @@ async def test_send_outbound_wraps_http_error(monkeypatch: pytest.MonkeyPatch) -
         await adapter.send_outbound("155512345", OutboundContent(body_text="hi"), credentials)
 
 
+@pytest.mark.parametrize("bad_response", [{}, {"messages": []}, {"messages": [{}]}])
+async def test_send_outbound_rejects_malformed_response(
+    monkeypatch: pytest.MonkeyPatch, bad_response: dict[str, object]
+) -> None:
+    """A 2xx response with an unexpected body must raise ChannelAdapterError,
+    not a bare KeyError/IndexError that escapes the worker's send-failure
+    handling (see adapters/_meta.py::extract_send_id)."""
+    mock_post = AsyncMock(return_value=bad_response)
+    monkeypatch.setattr(whatsapp_module, "_post_graph_api", mock_post)
+
+    credentials = {"org_id": "org-a", "access_token": "tok", "phone_number_id": "123"}
+    with pytest.raises(ChannelAdapterError):
+        await adapter.send_outbound("155512345", OutboundContent(body_text="hi"), credentials)
+
+
 async def test_interpret_delivery_webhook_maps_statuses() -> None:
     payload = {
         "entry": [

@@ -368,10 +368,25 @@ async def _process_outbound_message(session: AsyncSession, msg: queues.QueueMess
 async def _find_connection(
     session: AsyncSession, org_id: str, channel_type: str
 ) -> ChannelConnection | None:
+    """The connection an outbound send for this org/channel goes through.
+
+    Filters to ``active`` (a disabled connection must not be picked, same
+    invariant ``webhooks.py::_load_connection`` enforces for inbound) and
+    orders deterministically (oldest-active-wins) rather than leaving the
+    choice to whatever order Postgres happens to return for an org with two+
+    connections on one channel. Per-conversation connection pinning -- so a
+    reply always goes back out the connection its conversation came in on --
+    is a deliberate v1 deferral; this is the tightest fix that doesn't need a
+    schema change.
+    """
     result = await session.execute(
-        select(ChannelConnection).where(
-            ChannelConnection.org_id == org_id, ChannelConnection.channel_type == channel_type
+        select(ChannelConnection)
+        .where(
+            ChannelConnection.org_id == org_id,
+            ChannelConnection.channel_type == channel_type,
+            ChannelConnection.status == "active",
         )
+        .order_by(ChannelConnection.created_at)
     )
     return result.scalars().first()
 

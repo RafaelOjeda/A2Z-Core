@@ -39,6 +39,7 @@ import httpx
 from app.services.omnichannel.adapters._meta import (
     GRAPH_API_BASE,
     MetaGraphAdapter,
+    extract_send_id,
 )
 from app.services.omnichannel.adapters._meta import (
     post_graph_api as _post_graph_api,
@@ -135,7 +136,7 @@ class MessengerPlatformAdapter(MetaGraphAdapter):
         except httpx.HTTPError as exc:
             raise ChannelAdapterError(f"Messenger send failed: {exc}") from exc
 
-        message_id: str = data["message_id"]
+        message_id = extract_send_id(data, "message_id", channel="Messenger")
         return SendResult(external_message_id=message_id, status="sent")
 
     async def interpret_delivery_webhook(

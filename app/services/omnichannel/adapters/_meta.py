@@ -108,3 +108,27 @@ async def post_graph_api(
         resp.raise_for_status()
         data: dict[str, Any] = resp.json()
         return data
+
+
+def extract_send_id(data: dict[str, Any], *path: str | int, channel: str) -> str:
+    """Walk a Graph API send response for its message id, by key/index path.
+
+    A 2xx response with an unexpected body (a Graph API contract change, a
+    provider-side bug) must fail loudly as ``ChannelAdapterError`` -- the same
+    outcome as an HTTP error -- rather than escape ``send_outbound`` as a bare
+    ``KeyError``/``IndexError`` that the worker's ``except ChannelAdapterError``
+    doesn't catch (leaving the message stuck instead of following the normal
+    retry/mark-failed path). Shared by every Meta leaf so each one path-walks
+    its own response shape without repeating this guard.
+    """
+    value: Any = data
+    try:
+        for key in path:
+            value = value[key]
+        if not isinstance(value, str):
+            raise TypeError(value)
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ChannelAdapterError(
+            f"unexpected Graph API response shape for {channel}: {data!r}"
+        ) from exc
+    return value

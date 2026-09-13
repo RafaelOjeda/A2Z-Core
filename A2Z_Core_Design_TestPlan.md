@@ -43,25 +43,32 @@ Each Core module has a clean Python interface. Services import and call these.
 ```python
 # core/auth.py
 
+
 class AuthError(Exception):
     """Base auth exception."""
+
     pass
+
 
 class InvalidTokenError(AuthError):
     """JWT is invalid, expired, or signature doesn't match."""
+
     pass
+
 
 class MissingTokenError(AuthError):
     """No Authorization header."""
+
     pass
+
 
 def validate_jwt(token: str) -> dict:
     """
     Validate a Cognito JWT and return claims.
-    
+
     Args:
         token: Bearer token (without 'Bearer ' prefix)
-    
+
     Returns:
         {
             'sub': str,           # Cognito user ID (immutable)
@@ -69,11 +76,11 @@ def validate_jwt(token: str) -> dict:
             'email_verified': bool,
             'cognito:username': str,
         }
-    
+
     Raises:
         InvalidTokenError: Token is invalid, expired, or bad signature
         MissingTokenError: No token provided
-    
+
     Notes:
         - Caches Cognito public keys with 24h TTL in Redis
         - Rejects expired tokens
@@ -81,20 +88,21 @@ def validate_jwt(token: str) -> dict:
     """
     pass
 
+
 def get_current_user_from_request(request: Request) -> dict:
     """
     Extract and validate JWT from FastAPI request.
-    
+
     Args:
         request: FastAPI Request object
-    
+
     Returns:
         JWT claims dict (same as validate_jwt)
-    
+
     Raises:
         MissingTokenError: No Authorization header
         InvalidTokenError: Token invalid
-    
+
     Usage:
         # In a FastAPI handler
         @app.get("/my-data")
@@ -105,15 +113,16 @@ def get_current_user_from_request(request: Request) -> dict:
     """
     pass
 
+
 def create_test_token(sub: str, email: str) -> str:
     """
     Generate a valid test JWT for integration tests.
     Only usable in test/dev mode.
-    
+
     Args:
         sub: Cognito user ID
         email: Email claim
-    
+
     Returns:
         Valid JWT string signed with test key
     """
@@ -131,39 +140,50 @@ from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
+
 class Role(str, Enum):
     """User roles in an org."""
-    OWNER = "owner"          # Can do anything
-    ADMIN = "admin"          # Can do most things
-    MEMBER = "member"        # Can use services with restrictions
-    GUEST = "guest"          # Read-only
+
+    OWNER = "owner"  # Can do anything
+    ADMIN = "admin"  # Can do most things
+    MEMBER = "member"  # Can use services with restrictions
+    GUEST = "guest"  # Read-only
+
 
 class Membership(BaseModel):
     """User's membership in an org."""
-    user_id: str              # Cognito sub
+
+    user_id: str  # Cognito sub
     org_id: str
     role: Role
     joined_at: datetime
     # Future: permissions override (for per-user customization)
 
+
 class Org(BaseModel):
     """An organization (business)."""
-    org_id: str               # UUID, slug-friendly
+
+    org_id: str  # UUID, slug-friendly
     name: str
-    owner_id: str             # Cognito sub of creator
+    owner_id: str  # Cognito sub of creator
     created_at: datetime
     # ... other settings stored in Settings service
+
 
 class MembershipError(Exception):
     pass
 
+
 class NotFoundError(MembershipError):
     pass
+
 
 class AlreadyExistsError(MembershipError):
     pass
 
+
 # ===== Core Queries =====
+
 
 async def get_membership(
     user_id: str,
@@ -171,20 +191,20 @@ async def get_membership(
 ) -> Optional[Membership]:
     """
     Get a user's membership in an org.
-    
+
     Args:
         user_id: Cognito sub
         org_id: Org ID
-    
+
     Returns:
         Membership object if exists, None if not
-    
+
     Raises:
         None (returns None instead)
-    
+
     Performance:
         < 50ms (DynamoDB single item get)
-    
+
     Usage:
         membership = await core.membership.get_membership(user_id, org_id)
         if not membership:
@@ -194,19 +214,20 @@ async def get_membership(
     """
     pass
 
+
 async def list_user_orgs(user_id: str) -> List[Org]:
     """
     List all orgs a user belongs to.
-    
+
     Args:
         user_id: Cognito sub
-    
+
     Returns:
         List of Org objects (not Membership; just the org metadata)
-    
+
     Performance:
         < 100ms (DynamoDB query on GSI)
-    
+
     Notes:
         - Used for org switcher in UI
         - Returns only orgs user is a member of
@@ -214,26 +235,29 @@ async def list_user_orgs(user_id: str) -> List[Org]:
     """
     pass
 
+
 async def list_org_members(org_id: str) -> List[Membership]:
     """
     List all members of an org.
-    
+
     Args:
         org_id: Org ID
-    
+
     Returns:
         List of Membership objects (one per user in org)
-    
+
     Performance:
         < 200ms (DynamoDB query)
-    
+
     Notes:
         - Used for org settings / team management
         - Returns all members, sorted by role (owner first)
     """
     pass
 
+
 # ===== Mutations =====
+
 
 async def create_org(
     org_name: str,
@@ -241,26 +265,27 @@ async def create_org(
 ) -> Org:
     """
     Create a new org and add the creator as owner.
-    
+
     Args:
         org_name: Human-readable org name
         owner_id: Cognito sub of creator
-    
+
     Returns:
         Newly created Org object
-    
+
     Side effects:
         - Creates org in DynamoDB
         - Creates OWNER membership for owner_id
         - Logs to audit: org.created
-    
+
     Raises:
         None (assumes caller validated inputs)
-    
+
     Performance:
         < 100ms
     """
     pass
+
 
 async def add_member(
     org_id: str,
@@ -270,31 +295,32 @@ async def add_member(
 ) -> Membership:
     """
     Add a user to an org with a given role.
-    
+
     Args:
         org_id: Org ID
         user_id: Cognito sub of user to add
         role: Role to grant (owner, admin, member, guest)
         inviter_id: Cognito sub of who invited them
-    
+
     Returns:
         Newly created Membership
-    
+
     Side effects:
         - Creates membership in DynamoDB
         - Logs to audit: member.added
-    
+
     Raises:
         AlreadyExistsError: User already in org
-    
+
     Performance:
         < 100ms
-    
+
     Notes:
         - Does NOT validate that inviter has permission (caller must check)
         - Does NOT send email invitation (that's caller's job)
     """
     pass
+
 
 async def change_role(
     org_id: str,
@@ -304,27 +330,28 @@ async def change_role(
 ) -> Membership:
     """
     Change a user's role in an org.
-    
+
     Args:
         org_id: Org ID
         user_id: Cognito sub of user whose role changes
         new_role: New role
         changer_id: Cognito sub of who made the change
-    
+
     Returns:
         Updated Membership
-    
+
     Side effects:
         - Updates membership in DynamoDB
         - Logs to audit: member.role_changed with {old_role, new_role}
-    
+
     Raises:
         NotFoundError: Membership doesn't exist
-    
+
     Performance:
         < 100ms
     """
     pass
+
 
 async def remove_member(
     org_id: str,
@@ -333,26 +360,27 @@ async def remove_member(
 ) -> None:
     """
     Remove a user from an org.
-    
+
     Args:
         org_id: Org ID
         user_id: Cognito sub of user to remove
         remover_id: Cognito sub of who removed them
-    
+
     Side effects:
         - Deletes membership in DynamoDB
         - Logs to audit: member.removed
-    
+
     Raises:
         NotFoundError: Membership doesn't exist
-    
+
     Performance:
         < 100ms
-    
+
     Notes:
         - Last owner cannot be removed (caller must check)
     """
     pass
+
 
 async def create_user_if_not_exists(
     user_id: str,  # Cognito sub
@@ -361,15 +389,15 @@ async def create_user_if_not_exists(
     """
     Create a user record if it doesn't exist.
     Called by Cognito post-signup Lambda.
-    
+
     Args:
         user_id: Cognito sub
         email: User email
-    
+
     Side effects:
         - Creates user in DynamoDB if not exists
         - Does nothing if user already exists (idempotent)
-    
+
     Performance:
         < 50ms
     """
@@ -387,45 +415,59 @@ from enum import Enum
 from typing import List, Optional
 from dataclasses import dataclass
 
+
 class ServiceType(str, Enum):
     """A2Z services that send email."""
+
     INVOICING = "invoicing"
     OMNICHANNEL = "omnichannel"
     APPOINTMENTS = "appointments"
     EXPENSES = "expenses"
 
+
 class EmailStatus(str, Enum):
     """Delivery status of an email."""
+
     QUEUED = "queued"
-    SENT = "sent"           # SES accepted it
-    DELIVERED = "delivered" # Recipient received it
-    BOUNCED = "bounced"     # Hard bounce (invalid address)
+    SENT = "sent"  # SES accepted it
+    DELIVERED = "delivered"  # Recipient received it
+    BOUNCED = "bounced"  # Hard bounce (invalid address)
     COMPLAINED = "complained"  # Recipient marked as spam
-    REJECTED = "rejected"   # SES rejected it (rate limit, etc.)
+    REJECTED = "rejected"  # SES rejected it (rate limit, etc.)
+
 
 @dataclass
 class EmailResult:
     """Result of send_email call."""
-    message_id: str         # SES MessageId
-    status: EmailStatus     # Initial status (usually SENT)
+
+    message_id: str  # SES MessageId
+    status: EmailStatus  # Initial status (usually SENT)
     timestamp: datetime
     # For webhook processing later:
     external_message_id: str  # SES ID (used in SNS notifications)
 
+
 class EmailError(Exception):
     pass
 
+
 class SuppressionListError(EmailError):
     """Email is on suppression list (bounced before)."""
+
     pass
+
 
 class RateLimitError(EmailError):
     """Rate limit exceeded for this org/service."""
+
     pass
+
 
 class InvalidAddressError(EmailError):
     """Email address invalid."""
+
     pass
+
 
 async def send_email(
     org_id: str,
@@ -440,7 +482,7 @@ async def send_email(
 ) -> EmailResult:
     """
     Send an email on behalf of an org.
-    
+
     Args:
         org_id: Org ID (used to get domain, sender address, config set)
         service_type: Which A2Z service is sending (invoicing, omnichannel, etc.)
@@ -451,24 +493,24 @@ async def send_email(
         attachments: List of {filename, content, mime_type} dicts
         reply_to: Reply-to address (defaults to service@org.domain)
         metadata: Custom SES message tags (e.g., {invoice_id: "1054"})
-    
+
     Returns:
         EmailResult with message_id, status, timestamp
-    
+
     Side effects:
         - Sends email via SES
         - Logs to audit: email.sent with {to, subject, service_type}
         - Records in email_events table (for bounce/complaint tracking)
-    
+
     Raises:
         SuppressionListError: Email is on bounce/complaint list
         RateLimitError: Org exceeded email rate limit
         InvalidAddressError: Email address invalid
         EmailError: Any other SES error
-    
+
     Performance:
         < 200ms (SES is async, but we wait for acceptance)
-    
+
     Details on sender logic:
         1. Look up org settings to get verified domain (e.g., acme.com)
         2. Determine sender: {service_type}@{domain} (e.g., invoices@acme.com)
@@ -478,7 +520,7 @@ async def send_email(
         6. Check rate limit: has this org/service hit 50/hour limit?
         7. Send via SES with config set + metadata
         8. Log result
-    
+
     Example usage:
         result = await core.email.send_email(
             org_id="acme-jewelry",
@@ -492,19 +534,20 @@ async def send_email(
     """
     pass
 
+
 async def get_email_status(message_id: str) -> EmailStatus:
     """
     Get the delivery status of an email.
-    
+
     Args:
         message_id: The message_id from EmailResult
-    
+
     Returns:
         Current status (queued, sent, delivered, bounced, complained, rejected)
-    
+
     Performance:
         < 50ms
-    
+
     Notes:
         - Status is updated asynchronously via SNS webhooks
         - Initial status is usually SENT (SES accepted it)
@@ -512,33 +555,35 @@ async def get_email_status(message_id: str) -> EmailStatus:
     """
     pass
 
+
 async def get_suppression_list(org_id: str) -> dict:
     """
     Get bounce and complaint list for an org.
-    
+
     Returns:
         {
             'bounced': [email1, email2, ...],
             'complained': [email3, ...],
         }
-    
+
     Performance:
         < 100ms
-    
+
     Notes:
         - Used by admin/support to debug suppression
         - Not used by send_email (that checks via DynamoDB query)
     """
     pass
 
+
 async def unsuppress_email(org_id: str, email: str) -> None:
     """
     Remove email from bounce/complaint list.
-    
+
     Args:
         org_id: Org ID
         email: Email address to unsuppress
-    
+
     Side effects:
         - Removes from suppression table
         - Logs to audit: email.unsuppressed
@@ -556,25 +601,31 @@ async def unsuppress_email(org_id: str, email: str) -> None:
 from typing import Optional
 from datetime import datetime, timedelta
 
+
 @dataclass
 class StoredFile:
     """Metadata about a stored file."""
-    key: str              # S3 key (full path including org_id)
-    url: str              # Public S3 URL (if public) or signed URL
-    signed_url: str       # Signed URL valid for 1 hour
+
+    key: str  # S3 key (full path including org_id)
+    url: str  # Public S3 URL (if public) or signed URL
+    signed_url: str  # Signed URL valid for 1 hour
     size_bytes: int
     mime_type: str
     uploaded_at: datetime
-    uploaded_by: str      # Cognito sub of uploader
+    uploaded_by: str  # Cognito sub of uploader
+
 
 class StorageError(Exception):
     pass
 
+
 class FileTooLargeError(StorageError):
     pass
 
+
 class NotFoundError(StorageError):
     pass
+
 
 async def upload_file(
     org_id: str,
@@ -587,7 +638,7 @@ async def upload_file(
 ) -> StoredFile:
     """
     Upload a file to S3.
-    
+
     Args:
         org_id: Org ID
         service_type: Which service is uploading
@@ -596,27 +647,27 @@ async def upload_file(
         mime_type: MIME type (e.g., "application/pdf")
         uploaded_by: Cognito sub of uploader
         ttl_days: If set, file auto-deletes after this many days
-    
+
     Returns:
         StoredFile with key, url, signed_url, metadata
-    
+
     Side effects:
         - Uploads to S3 at key: s3://ledger/{org_id}/{service_type}/{timestamp}_{filename}
         - Logs to audit: file.uploaded with {filename, size, mime_type}
         - Records metadata in DynamoDB for querying
-    
+
     Raises:
         FileTooLargeError: File > 100 MB
-    
+
     Performance:
         < 1 second (depends on file size)
-    
+
     Notes:
         - S3 bucket is private; access via signed URLs only
         - Signed URLs expire after 1 hour by default
         - Files are org-scoped (S3 key includes org_id)
         - If ttl_days is set, S3 lifecycle rule deletes file after N days
-    
+
     Example:
         result = await core.storage.upload_file(
             org_id="acme-jewelry",
@@ -631,56 +682,60 @@ async def upload_file(
     """
     pass
 
+
 async def download_file(org_id: str, key: str) -> bytes:
     """
     Download a file from S3.
-    
+
     Args:
         org_id: Org ID (for access control)
         key: S3 key (from StoredFile.key)
-    
+
     Returns:
         File bytes
-    
+
     Raises:
         NotFoundError: File doesn't exist
         PermissionError: File doesn't belong to org_id
-    
+
     Performance:
         < 500 ms (depends on file size)
-    
+
     Notes:
         - Enforces org_id in key to prevent cross-org access
     """
     pass
 
+
 async def get_file_metadata(org_id: str, key: str) -> StoredFile:
     """
     Get metadata about a file without downloading it.
-    
+
     Returns:
         StoredFile metadata (size, mime_type, uploaded_at, etc.)
-    
+
     Performance:
         < 50ms (DynamoDB lookup)
     """
     pass
 
+
 async def delete_file(org_id: str, key: str, deleted_by: str) -> None:
     """
     Delete a file from S3.
-    
+
     Args:
         org_id: Org ID
         key: S3 key
         deleted_by: Cognito sub of who deleted it
-    
+
     Side effects:
         - Deletes from S3
         - Marks as deleted in DynamoDB (soft delete for audit trail)
         - Logs to audit: file.deleted
     """
     pass
+
 
 async def list_files(
     org_id: str,
@@ -689,34 +744,35 @@ async def list_files(
 ) -> List[StoredFile]:
     """
     List files for an org.
-    
+
     Args:
         org_id: Org ID
         service_type: If set, only files uploaded by this service
         filename_prefix: If set, only files matching this prefix
-    
+
     Returns:
         List of StoredFile metadata
-    
+
     Performance:
         < 200ms
     """
     pass
 
+
 def generate_signed_url(key: str, expires_in: int = 3600) -> str:
     """
     Generate a signed URL valid for a file.
-    
+
     Args:
         key: S3 key
         expires_in: Seconds until URL expires (default 1 hour)
-    
+
     Returns:
         HTTPS URL safe to share with anyone (including clients)
-    
+
     Performance:
         < 50ms
-    
+
     Notes:
         - Used when sending invoice PDFs to clients
         - Signed URL expires automatically
@@ -735,8 +791,10 @@ from enum import Enum
 from typing import Optional
 from datetime import datetime
 
+
 class ActionType(str, Enum):
     """Types of auditable actions."""
+
     # Membership
     ORG_CREATED = "org.created"
     MEMBER_ADDED = "member.added"
@@ -755,24 +813,28 @@ class ActionType(str, Enum):
     # Services define their own action types
     # e.g., INVOICE_CREATED = "invoice.created"
 
+
 @dataclass
 class AuditEvent:
     """An auditable action."""
-    event_id: str           # UUID
+
+    event_id: str  # UUID
     org_id: str
     timestamp: datetime
-    actor_id: str           # Cognito sub of who did it
+    actor_id: str  # Cognito sub of who did it
     action: ActionType
-    resource_type: str      # What was affected (user, email, file, invoice, etc.)
-    resource_id: str        # ID of the resource
-    metadata: dict          # Action-specific details
+    resource_type: str  # What was affected (user, email, file, invoice, etc.)
+    resource_id: str  # ID of the resource
+    metadata: dict  # Action-specific details
     # e.g., for member.role_changed:
     #   {old_role: "member", new_role: "admin"}
     # e.g., for email.sent:
     #   {to: "client@example.com", subject: "...", service_type: "invoicing"}
 
+
 class AuditError(Exception):
     pass
+
 
 async def log_audit(
     org_id: str,
@@ -784,7 +846,7 @@ async def log_audit(
 ) -> AuditEvent:
     """
     Log an auditable action.
-    
+
     Args:
         org_id: Org ID
         actor_id: Cognito sub of who did it
@@ -792,21 +854,21 @@ async def log_audit(
         resource_type: What was affected (user, email, invoice, etc.)
         resource_id: ID of the resource
         metadata: Action-specific details (optional)
-    
+
     Returns:
         Logged AuditEvent (includes generated event_id and timestamp)
-    
+
     Side effects:
         - Appends to audit log in DynamoDB
-    
+
     Performance:
         < 50ms
-    
+
     Notes:
         - Audit log is append-only (never updated or deleted)
         - Used for compliance, debugging, activity feeds
         - Services can define their own ActionType values (not just Core's)
-    
+
     Example:
         await core.audit.log_audit(
             org_id="acme-jewelry",
@@ -819,6 +881,7 @@ async def log_audit(
     """
     pass
 
+
 async def get_audit_events(
     org_id: str,
     action_type: Optional[ActionType] = None,
@@ -830,7 +893,7 @@ async def get_audit_events(
 ) -> List[AuditEvent]:
     """
     Query audit log with filters.
-    
+
     Args:
         org_id: Org ID (required)
         action_type: Filter by action (optional)
@@ -839,13 +902,13 @@ async def get_audit_events(
         from_time: Start time (optional)
         to_time: End time (optional)
         limit: Max results (default 100)
-    
+
     Returns:
         List of AuditEvent, sorted by timestamp descending
-    
+
     Performance:
         < 500ms (may require DynamoDB scan in worst case)
-    
+
     Notes:
         - Org_id is always required (no cross-org queries)
         - Used for activity logs, compliance reports
@@ -863,42 +926,47 @@ async def get_audit_events(
 from typing import Optional
 from datetime import datetime
 
+
 @dataclass
 class OrgSettings:
     """Organization settings."""
+
     org_id: str
-    timezone: str              # e.g., "America/Los_Angeles"
-    currency: str              # e.g., "USD"
-    locale: str                # e.g., "en_US"
-    domain: str                # Verified domain (e.g., "acme.com")
-    invoice_number_prefix: str # e.g., "INV-" for INV-1054
-    next_invoice_number: int   # Auto-incrementing counter
-    plan_tier: str             # "free", "pro", "team"
-    sender_name: str           # Display name for emails (e.g., "Acme Jewelry")
-    metadata: dict             # Free-form custom settings
+    timezone: str  # e.g., "America/Los_Angeles"
+    currency: str  # e.g., "USD"
+    locale: str  # e.g., "en_US"
+    domain: str  # Verified domain (e.g., "acme.com")
+    invoice_number_prefix: str  # e.g., "INV-" for INV-1054
+    next_invoice_number: int  # Auto-incrementing counter
+    plan_tier: str  # "free", "pro", "team"
+    sender_name: str  # Display name for emails (e.g., "Acme Jewelry")
+    metadata: dict  # Free-form custom settings
     updated_at: datetime
+
 
 class SettingsError(Exception):
     pass
 
+
 async def get_org_settings(org_id: str) -> OrgSettings:
     """
     Get org settings.
-    
+
     Args:
         org_id: Org ID
-    
+
     Returns:
         OrgSettings object (defaults applied if some fields missing)
-    
+
     Performance:
         < 50ms (Redis cache with 5min TTL, falls back to DynamoDB)
-    
+
     Notes:
         - Returns defaults for missing fields
         - Heavily cached since read frequently
     """
     pass
+
 
 async def set_org_settings(
     org_id: str,
@@ -907,26 +975,26 @@ async def set_org_settings(
 ) -> OrgSettings:
     """
     Update org settings.
-    
+
     Args:
         org_id: Org ID
         changes: Dict of fields to update (partial update)
         changed_by: Cognito sub of who changed it
-    
+
     Returns:
         Updated OrgSettings
-    
+
     Side effects:
         - Updates in DynamoDB
         - Invalidates Redis cache
         - Logs to audit: settings.changed with {old_values, new_values}
-    
+
     Raises:
         SettingsError: Invalid field or value
-    
+
     Performance:
         < 100ms
-    
+
     Example:
         new_settings = await core.settings.set_org_settings(
             org_id="acme-jewelry",
@@ -939,21 +1007,22 @@ async def set_org_settings(
     """
     pass
 
+
 def get_next_invoice_number(org_id: str, prefix: str) -> str:
     """
     Get the next invoice number for this org.
     Atomically increments the counter.
-    
+
     Args:
         org_id: Org ID
         prefix: Prefix from settings (e.g., "INV-")
-    
+
     Returns:
         Next invoice number as string (e.g., "INV-1054")
-    
+
     Performance:
         < 50ms (atomic DynamoDB update)
-    
+
     Notes:
         - Used by Invoicing service when creating invoices
         - Guarantees no gaps or collisions
@@ -1119,18 +1188,19 @@ These are integration tests that validate Core works as a cohesive unit.
 ```python
 # tests/test_integration_membership.py
 
+
 @pytest.mark.asyncio
 async def test_create_org_and_manage_members():
     # Owner signs up
     owner_sub = "auth0|owner123"
     owner_email = "owner@acme.com"
-    
+
     # Create user in Core (called by Cognito post-signup lambda)
     await core.membership.create_user_if_not_exists(
         user_id=owner_sub,
         email=owner_email,
     )
-    
+
     # Create org
     org = await core.membership.create_org(
         org_name="Acme Jewelry",
@@ -1138,17 +1208,17 @@ async def test_create_org_and_manage_members():
     )
     assert org.org_id is not None
     assert org.owner_id == owner_sub
-    
+
     # Verify owner is in org with OWNER role
     membership = await core.membership.get_membership(owner_sub, org.org_id)
     assert membership is not None
     assert membership.role == Role.OWNER
-    
+
     # List members (should be 1)
     members = await core.membership.list_org_members(org.org_id)
     assert len(members) == 1
     assert members[0].user_id == owner_sub
-    
+
     # Add a team member
     member_sub = "auth0|member456"
     member_email = "sarah@acme.com"
@@ -1163,11 +1233,11 @@ async def test_create_org_and_manage_members():
         inviter_id=owner_sub,
     )
     assert new_member.role == Role.MEMBER
-    
+
     # List members (should be 2)
     members = await core.membership.list_org_members(org.org_id)
     assert len(members) == 2
-    
+
     # Change member's role to ADMIN
     updated = await core.membership.change_role(
         org_id=org.org_id,
@@ -1176,7 +1246,7 @@ async def test_create_org_and_manage_members():
         changer_id=owner_sub,
     )
     assert updated.role == Role.ADMIN
-    
+
     # Verify audit trail
     events = await core.audit.get_audit_events(
         org_id=org.org_id,
@@ -1184,7 +1254,7 @@ async def test_create_org_and_manage_members():
         resource_id=member_sub,
     )
     assert len(events) >= 1
-    assert events[0].metadata['new_role'] == "admin"
+    assert events[0].metadata["new_role"] == "admin"
 ```
 
 ### 4.2 Scenario: Send Email & Track Delivery
@@ -1195,7 +1265,7 @@ async def test_create_org_and_manage_members():
 @pytest.mark.asyncio
 async def test_send_email_and_track_delivery():
     org_id = "test-org-456"
-    
+
     # Send email
     result = await core.email.send_email(
         org_id=org_id,
@@ -1205,14 +1275,14 @@ async def test_send_email_and_track_delivery():
         body_html="<p>Amount due: $1,500</p>",
         metadata={"invoice_id": "1054"},
     )
-    
+
     assert result.status == EmailStatus.SENT
     message_id = result.message_id
-    
+
     # Verify it was logged in email_events
     metadata = await core.storage.get_file_metadata(org_id, message_id)
     assert metadata is not None
-    
+
     # Simulate SES bounce notification (webhook from SNS → Lambda)
     await core.email._handle_bounce_notification(
         org_id=org_id,
@@ -1220,11 +1290,11 @@ async def test_send_email_and_track_delivery():
         to="client@example.com",
         bounce_type="Permanent",
     )
-    
+
     # Verify email is now on suppression list
     suppression = await core.email.get_suppression_list(org_id)
-    assert "client@example.com" in suppression['bounced']
-    
+    assert "client@example.com" in suppression["bounced"]
+
     # Try to send to same email again → should raise SuppressionListError
     with pytest.raises(core.email.SuppressionListError):
         await core.email.send_email(
@@ -1234,10 +1304,10 @@ async def test_send_email_and_track_delivery():
             subject="Invoice #1055",
             body_html="...",
         )
-    
+
     # Unsuppress
     await core.email.unsuppress_email(org_id, "client@example.com")
-    
+
     # Now it should work
     result2 = await core.email.send_email(
         org_id=org_id,
@@ -1370,6 +1440,7 @@ tests/
 ```python
 # tests/unit/test_membership.py
 
+
 @pytest.fixture
 async def mock_dynamodb(monkeypatch):
     """Mock DynamoDB client."""
@@ -1377,27 +1448,29 @@ async def mock_dynamodb(monkeypatch):
     monkeypatch.setattr("core.membership.dynamodb", mock)
     return mock
 
+
 @pytest.mark.asyncio
 async def test_get_membership_found(mock_dynamodb):
     mock_dynamodb.get_item.return_value = {
-        'Item': {
-            'user_id': 'auth0|123',
-            'org_id': 'acme',
-            'role': 'owner',
+        "Item": {
+            "user_id": "auth0|123",
+            "org_id": "acme",
+            "role": "owner",
         }
     }
-    
-    result = await core.membership.get_membership('auth0|123', 'acme')
-    
+
+    result = await core.membership.get_membership("auth0|123", "acme")
+
     assert result.role == Role.OWNER
     mock_dynamodb.get_item.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_get_membership_not_found(mock_dynamodb):
-    mock_dynamodb.get_item.return_value = {'Item': None}
-    
-    result = await core.membership.get_membership('auth0|nonexistent', 'acme')
-    
+    mock_dynamodb.get_item.return_value = {"Item": None}
+
+    result = await core.membership.get_membership("auth0|nonexistent", "acme")
+
     assert result is None
 ```
 
@@ -1410,6 +1483,7 @@ Tests that use real (or local) DynamoDB, S3, SES.
 ```python
 # tests/integration/conftest.py
 
+
 @pytest.fixture(scope="session")
 async def localstack():
     """Start LocalStack with DynamoDB, S3."""
@@ -1418,6 +1492,7 @@ async def localstack():
     # Create bucket
     yield stack
     # Cleanup
+
 
 @pytest.fixture
 async def org_id():
@@ -1437,32 +1512,30 @@ Verify Core handles production load.
 ```python
 # tests/load/test_load_membership.py
 
+
 @pytest.mark.asyncio
 @pytest.mark.load
 async def test_membership_queries_under_load():
     """1,000 concurrent get_membership queries."""
     org_id = "load-test-org"
-    
+
     # Create 100 users in org
     users = [f"user-{i}" for i in range(100)]
     for user in users:
         await core.membership.create_user_if_not_exists(user, f"{user}@example.com")
         await core.membership.add_member(org_id, user, Role.MEMBER, "owner")
-    
+
     # Execute 1,000 concurrent queries
     start = time.time()
-    tasks = [
-        core.membership.get_membership(random.choice(users), org_id)
-        for _ in range(1000)
-    ]
+    tasks = [core.membership.get_membership(random.choice(users), org_id) for _ in range(1000)]
     results = await asyncio.gather(*tasks)
     elapsed = time.time() - start
-    
+
     # Verify
     assert all(r is not None for r in results)
     assert elapsed < 10  # Should complete in < 10 seconds
     avg_latency = elapsed / 1000
-    print(f"Average latency: {avg_latency*1000:.2f}ms")
+    print(f"Average latency: {avg_latency * 1000:.2f}ms")
     assert avg_latency < 0.050  # < 50ms per query
 ```
 
@@ -1502,44 +1575,60 @@ Every Core module defines and raises specific errors. Services catch and handle 
 ```python
 # core/exceptions.py
 
+
 class CoreError(Exception):
     """Base exception for all Core errors."""
+
     status_code: int = 500
+
 
 class AuthError(CoreError):
     status_code = 401
 
+
 class InvalidTokenError(AuthError):
     """JWT invalid or expired."""
+
     pass
+
 
 class MissingTokenError(AuthError):
     """No JWT provided."""
+
     pass
+
 
 class MembershipError(CoreError):
     status_code = 400
 
+
 class NotFoundError(MembershipError):
     status_code = 404
+
 
 class AlreadyExistsError(MembershipError):
     status_code = 409
 
+
 class EmailError(CoreError):
     status_code = 400
+
 
 class SuppressionListError(EmailError):
     status_code = 400
 
+
 class RateLimitError(EmailError):
     status_code = 429
+
 
 class StorageError(CoreError):
     status_code = 400
 
+
 class FileTooLargeError(StorageError):
     pass
+
 
 class AuditError(CoreError):
     status_code = 500
@@ -1550,19 +1639,20 @@ class AuditError(CoreError):
 ```python
 # app/services/invoicing/handlers.py
 
+
 @app.post("/invoices/send")
 async def send_invoice(request: Request, invoice_id: str, org_id: str):
     try:
         user = auth.get_current_user_from_request(request)
-        
+
         # Check membership
-        membership = await core.membership.get_membership(user['sub'], org_id)
+        membership = await core.membership.get_membership(user["sub"], org_id)
         if not membership:
             raise HTTPException(status_code=403, detail="Not in org")
-        
+
         # Send email
         result = await core.email.send_email(...)
-        
+
     except core.auth.MissingTokenError:
         raise HTTPException(status_code=401, detail="No token")
     except core.email.SuppressionListError as e:
@@ -1607,7 +1697,7 @@ async def send_invoice(request: Request, invoice_id: str, org_id: str):
 ```python
 # Example in Invoicing service
 user = auth.get_current_user_from_request(request)
-membership = await core.membership.get_membership(user['sub'], org_id)
+membership = await core.membership.get_membership(user["sub"], org_id)
 
 if membership is None:
     raise PermissionError("User not in org")

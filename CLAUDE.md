@@ -182,11 +182,11 @@ Cross-service communication is **events only**. Core owns the publisher; service
 ```python
 async def publish_event(
     org_id: str,
-    event_type: str,        # dotted, e.g. "invoice.paid", "member.added", "email.bounced"
-    data: dict,             # event-specific payload, JSON-serializable
+    event_type: str,  # dotted, e.g. "invoice.paid", "member.added", "email.bounced"
+    data: dict,  # event-specific payload, JSON-serializable
     *,
-    source: str = "a2z.core",   # or the service name when called from a service
-) -> str:                   # returns the EventBridge event id
+    source: str = "a2z.core",  # or the service name when called from a service
+) -> str:  # returns the EventBridge event id
     """
     Publish a domain event to the A2Z event bus.
     - Wraps PutEvents on a custom EventBridge bus ("a2z-bus").
@@ -222,7 +222,7 @@ Email already references "50/hour per org" but there's no limiter. Build a gener
 ```python
 async def check_and_increment(
     org_id: str,
-    action: str,            # e.g. "email.send", "ai.parse"
+    action: str,  # e.g. "email.send", "ai.parse"
     *,
     limit: int,
     window_seconds: int,
@@ -372,6 +372,27 @@ Order chosen by dependency depth:
 **Phase 2 — Invoicing** (separate effort; Core is frozen). Invoicing imports Core, owns its Postgres tables + state machine + PDF + AI parse, publishes `invoice.*` events. If Invoicing needs something Core doesn't offer, **change Core deliberately and re-run all Core tests** — don't add a service-specific hack into Core.
 
 **Phase 3 — Omni-Channel** (validates Core works for two services at once).
+
+---
+
+## 17. Future: Website & Frontend Isolation (Phase 2+)
+
+**Currently**, the landing page is served as a FastAPI route from `app/routers/landing.py` — part of the same process as the Core API. This is acceptable for the MVP but **must be separated in Phase 2 and beyond**.
+
+**Rationale:**
+- The marketing website (landing page, docs, status page) should not require the backend API to be operational.
+- Failure of the backend should not bring down the public-facing site.
+- Independent scaling, CDN caching, and incident response become possible when the website is separate.
+
+**How to split (Phase 2+):**
+1. Create a separate frontend repository (Next.js, React SPA, or static site generator).
+2. Host it independently (Vercel, S3 + CloudFront, or equivalent).
+3. API: `api.a2z.{domain}` or `a2z.{domain}/api/v1`.
+4. Website: root domain or `www.a2z.{domain}`.
+5. Remove `app/routers/landing.py` and the landing route from `app/main.py`.
+6. Update `Dockerfile` and deployment to omit the website code entirely.
+
+**Implementation note:** the landing page HTML can remain in this repo during the transition, but it should be built and deployed as a separate artifact (via a separate CI/CD pipeline) rather than baked into the API Docker image.
 
 ---
 

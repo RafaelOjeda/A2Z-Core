@@ -28,7 +28,7 @@ flowchart TB
     API -->|"Secrets Manager"| SM["Secrets Manager (managed):\nper-org channel credentials"]
     API -->|"DynamoDB/S3/SES/EventBridge"| Managed["Managed AWS services\n(Core's tables/bucket/bus)"]
     API -->|"HTTPS"| SNSNotif["SNS -> app/routers/ses_notifications.py\n(signature-verified, no Lambda)"]
-    PGC -.->|"nightly pg_dump"| S3Backup[("S3 -- no retention/restore\ntesting yet (see below)")]
+    PGC -.->|"nightly pg_dump"| S3Backup[("S3 -- restore drilled in CI,\nnot yet on the real box (see below)")]
 ```
 
 - **One image, one process family** (`CLAUDE.md` §2/§14): the repo's single
@@ -51,9 +51,14 @@ flowchart TB
 - **Known trade-off, accepted in writing**: single point of failure — a
   reboot takes down webhook endpoints (providers retry with backoff, so
   brief deploys are fine; extended downtime loses messages). Postgres
-  durability is the operator's job: a nightly `pg_dump` to S3 exists, but a
-  **restore from it has not been tested** — the single highest-risk open
-  item, tracked in `app/services/omnichannel/CLAUDE.md` §16.
+  durability is the operator's job: a nightly `pg_dump` to S3 exists
+  alongside a `restore-postgres.sh` companion, and
+  `tests/integration/backup/test_restore_drill.py` proves both scripts
+  work end to end in CI — but **nobody has drilled a restore against the
+  deployed box itself**, since no AWS account exists yet to deploy one.
+  See [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md)'s backup runbook for
+  that procedure; still the single highest-risk open item, tracked in
+  `app/services/omnichannel/CLAUDE.md` §16.
 
 ## What's actually codified in `infra/` today
 

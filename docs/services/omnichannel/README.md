@@ -170,6 +170,7 @@ See [`known-issues.md`](known-issues.md) for the full list — notably: SMS
 has a working adapter that isn't registered; commission attribution and AI
 features are genuinely not built; outbound media/attachments aren't
 supported on any channel, and inbound media on WhatsApp/Messenger/Instagram
-is a placeholder, not downloaded; and there's no tested Postgres
-backup/restore procedure yet (the single highest-risk item before a real
-production launch).
+is a placeholder, not downloaded; and the Postgres backup/restore *scripts*
+are now proven by an automated CI drill, but nobody has drilled a restore
+on a real deployed box yet — still the single highest-risk item before a
+real production launch (no AWS account exists to drill against).

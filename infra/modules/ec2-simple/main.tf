@@ -120,6 +120,13 @@ resource "aws_instance" "app" {
     cognito_user_pool_id        = var.cognito_user_pool_id
     cognito_app_client_id       = var.cognito_app_client_id
     ses_notifications_topic_arn = var.ses_notifications_topic_arn
+    # Read verbatim, not Terraform-templated: these two scripts take their
+    # own config from environment variables (backup.env, below) precisely
+    # so tests/integration/backup/test_restore_drill.py can run them
+    # directly without going through templatefile() at all. See each
+    # script's own header for the env-var contract.
+    backup_script  = file("${path.module}/files/backup-postgres.sh")
+    restore_script = file("${path.module}/files/restore-postgres.sh")
   }))
 
   associate_public_ip_address = true

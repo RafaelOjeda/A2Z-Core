@@ -102,10 +102,111 @@ rate limit and drop realtime updates.
 
 `user-data.sh` installs a nightly cron (`backup-postgres.sh`, 03:00) that
 `pg_dump`s the box's Postgres container and uploads it to
-`s3://<ledger-bucket>/backups/postgres/`. **This has not been
-restore-tested.** There is no RDS safety net on this shape — treat a
-restore drill as a blocking prerequisite before storing anything you can't
-afford to lose, not an optional hardening step.
+`s3://<ledger-bucket>/backups/postgres/`. Its companion,
+`restore-postgres.sh`, lives next to it at `/opt/a2z-core/` (both come from
+`infra/modules/ec2-simple/files/` — see that directory for the full
+env-var contract each script reads). **The restore path is exercised
+automatically on every CI run** (`tests/integration/backup/`, which runs
+both real scripts end to end against throwaway databases — see that test's
+docstring), so the scripts themselves are proven. What that test *can't*
+prove is that a specific backup sitting in S3 right now is good and that
+you, the operator, can carry out the cutover under pressure — that's what
+this section is for. Do this drill at least once before trusting the box
+with data you can't afford to lose, and re-do it whenever the schema or
+the scripts change materially.
+
+**There is no RDS safety net on this shape.** If the EC2 instance's disk
+fails, this backup is the only way back.
+
+### 1. Find a backup
+
+```bash
+aws s3 ls s3://<ledger-bucket>/backups/postgres/
+```
+
+**Retention reality, not a preference:** the ledger bucket's lifecycle rule
+(`infra/modules/s3`) is not scoped to a prefix — it governs
+`backups/postgres/` the same as everything else in the bucket. Concretely:
+objects move to `STANDARD_IA` at 30 days, to `GLACIER` at 60 days (a plain
+`aws s3 cp` on anything that old will fail — it needs a `restore-object`
+thaw, which takes hours), and are **deleted outright at 90 days**. Pick a
+backup inside the first 60 days if you want it usable without a Glacier
+restore delay.
+
+### 2. Restore into a fresh database
+
+```bash
+ssh ubuntu@<PUBLIC_IP>
+sudo /opt/a2z-core/restore-postgres.sh <backup-filename>.sql.gz a2z_restore_check
+```
+
+This restores into a **new** database (`a2z_restore_check`), never onto the
+live `a2z` — restoring onto a database that already has both schemas would
+collide on every object, and the whole point of a drill is to verify before
+you touch anything live. On success the script prints a table-count and
+`alembic_version` summary per schema; read it before continuing.
+
+### 3. Handle a migration-version mismatch
+
+The dump carries the `alembic_version` row each schema had **at backup
+time**. If the running app image expects a newer schema than the restored
+dump, apply the pending migrations before pointing the app at it —
+**both** services have their own independent Alembic environment:
+
+```bash
+# `postgres` (the compose service name), not localhost -- `docker compose
+# run` joins the same compose network the box's containers already use.
+# Working directory matches docs/migrations.md's convention (`cd
+# app/services/<svc> && alembic upgrade head`) -- each service's
+# alembic.ini expects to be run from its own directory.
+docker compose -f /opt/a2z-core/docker-compose.yml run --rm \
+  -e DATABASE_URL=postgresql+asyncpg://a2z:<pw>@postgres:5432/a2z_restore_check \
+  --workdir /srv/app/app/services/omnichannel \
+  app alembic upgrade head
+
+docker compose -f /opt/a2z-core/docker-compose.yml run --rm \
+  -e DATABASE_URL=postgresql+asyncpg://a2z:<pw>@postgres:5432/a2z_restore_check \
+  --workdir /srv/app/app/services/invoicing \
+  app alembic upgrade head
+```
+
+If the restored `alembic_version` already matches both services' current
+head (the summary from step 2 told you this), skip this step — there's
+nothing to upgrade.
+
+### 4. Verify, then cut over
+
+Spot-check the restored data (row counts against what you expect, a couple
+of known records) — the restore script's summary only proves the schema
+came back, not that the specific data you care about is intact. Once
+satisfied:
+
+```bash
+# In /opt/a2z-core/.env, change the DATABASE_URL line's trailing database
+# name from `a2z` to `a2z_restore_check` (same host/user/password -- only
+# the database name changes):
+#   DATABASE_URL=postgresql+asyncpg://a2z:<pw>@postgres:5432/a2z_restore_check
+#
+# For a real incident (not a drill), instead rename databases inside the
+# postgres container so `a2z_restore_check` becomes the new `a2z` and the
+# old one is preserved under another name for forensics rather than
+# dropped -- that way .env never needs to change at all.
+sudo systemctl restart a2z-core
+curl -sf https://<domain>/health
+```
+
+### 5. Clean up
+
+Postgres runs in a container on this box, not natively on the host —
+there's no local `psql`/`postgres` OS user to reach it directly:
+
+```bash
+docker compose -f /opt/a2z-core/docker-compose.yml exec -T postgres \
+  psql -U a2z -d postgres -c 'DROP DATABASE a2z_restore_check WITH (FORCE);'
+```
+
+Leaving the restored copy around costs disk on a box that also runs
+Postgres itself — drop it once you've confirmed what you needed to confirm.
 
 ## Troubleshooting
 

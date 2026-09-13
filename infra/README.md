@@ -89,9 +89,13 @@ Cut entirely: NAT gateway (~$32), ALB (~$18), ECS/Fargate + autoscaling
 [`docs/architecture/single-box-mvp.md`](../docs/architecture/single-box-mvp.md)
 for what replaced each one in application code.
 
-**Non-negotiable operational gap:** the nightly `pg_dump -> S3` cron in
-`user-data.sh` is the only backup for Postgres -- there is no RDS safety
-net. A restore from it has not been drilled; treat that as the single
+**Non-negotiable operational gap:** the nightly `pg_dump -> S3` cron
+(`files/backup-postgres.sh`) is the only backup for Postgres -- there is no
+RDS safety net. Its companion `files/restore-postgres.sh` is proven end to
+end against throwaway databases by `tests/integration/backup/` on every CI
+run, but **a restore has not been drilled against the deployed box itself**
+-- no AWS account exists yet to deploy one against. Treat that on-box drill
+(procedure in `../DEPLOYMENT.md`'s backup runbook) as the single
 highest-risk item before trusting this with real data (matches the same
 open item already tracked in `app/services/omnichannel/CLAUDE.md` §16).
 

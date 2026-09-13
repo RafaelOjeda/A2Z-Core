@@ -124,11 +124,16 @@ layout, apply order, and the cost table.
 
 ## What this does *not* solve
 
-- **No RDS safety net.** The nightly `pg_dump -> S3` cron in
-  `user-data.sh` is the only Postgres backup. It has not been restore-tested.
-  This is the single highest-risk open item — see
-  [`../../infra/README.md`](../../infra/README.md)'s cost section and
-  `app/services/omnichannel/CLAUDE.md` §16.
+- **No RDS safety net.** The nightly `pg_dump -> S3` cron
+  (`infra/modules/ec2-simple/files/backup-postgres.sh`) is the only Postgres
+  backup, and its companion `restore-postgres.sh` is now proven end to end
+  by an automated CI drill (`tests/integration/backup/`) that runs both
+  scripts for real against throwaway databases. What that proves is that
+  the *scripts* work — it does not replace actually drilling a restore on
+  the deployed box, which nobody has done yet (no AWS account exists to
+  drill against). See [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md)'s backup
+  runbook for that procedure, [`../../infra/README.md`](../../infra/README.md)'s
+  cost section, and `app/services/omnichannel/CLAUDE.md` §16.
 - **No HA.** One instance, one AZ, one Postgres. A box reboot takes down
   webhook endpoints; providers retry with backoff so brief deploys are fine,
   extended downtime loses messages.

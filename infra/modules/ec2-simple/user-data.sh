@@ -144,32 +144,53 @@ systemctl daemon-reload
 systemctl enable a2z-core
 systemctl start a2z-core
 
+# --- Backup + restore config, shared by both scripts below via env vars
+#     rather than Terraform substitution inside the scripts themselves --
+#     that's what lets tests/integration/backup/test_restore_drill.py run
+#     the identical scripts directly, overriding just PG_EXEC/S3_BUCKET. ---
+cat > /opt/a2z-core/backup.env <<EOF
+export S3_BUCKET=${s3_bucket}
+export COMPOSE_FILE=/opt/a2z-core/docker-compose.yml
+export PGUSER=a2z
+export PGDATABASE=a2z
+EOF
+chmod 600 /opt/a2z-core/backup.env
+
 # --- Nightly Postgres backup -> S3 (non-negotiable: no RDS safety net here,
 #     app/services/omnichannel/CLAUDE.md §12). Reuses the ledger bucket's
-#     existing IAM grant (s3:PutObject on arn:aws:s3:::<bucket>/*, already
-#     covers this prefix) rather than needing a new one. NOTE: the ledger
-#     bucket's lifecycle rule (infra/modules/s3) is tuned for invoice
-#     PDFs/attachments, not backups specifically -- if backups need their
-#     own shorter/longer retention than whatever that rule expires objects
-#     at, add a prefix-scoped rule to that module rather than assuming this
-#     script's 30-day local cleanup is the only retention in effect. ---
+#     existing IAM grant (s3:PutObject/GetObject/ListBucket on
+#     arn:aws:s3:::<bucket>/*, already covers this prefix) rather than
+#     needing a new one. NOTE: the ledger bucket's lifecycle rule
+#     (infra/modules/s3) is tuned for invoice PDFs/attachments, not
+#     backups specifically, and is NOT prefix-scoped -- it also governs
+#     backups/postgres/ (Glacier at 60d, deleted at 90d). See
+#     DEPLOYMENT.md's backup runbook for the usable restore window this
+#     creates.
+#
+#     Script content comes from
+#     infra/modules/ec2-simple/files/backup-postgres.sh via file() at
+#     `terraform apply` time (see main.tf) -- read THAT file for the full
+#     env-var contract; this heredoc only places it on the box. The
+#     heredoc delimiter is quoted so bash does not expand the script's own
+#     $VARS while writing it -- they're meant to be evaluated when the
+#     script itself runs, not now. ---
 cat > /opt/a2z-core/backup-postgres.sh <<'BACKUP_EOF'
-#!/bin/bash
-set -euo pipefail
-STAMP="$(date +%F-%H%M)"
-FILE="/tmp/a2z-postgres-$STAMP.sql.gz"
-docker compose -f /opt/a2z-core/docker-compose.yml exec -T postgres \
-  pg_dump -U a2z a2z | gzip > "$FILE"
-aws s3 cp "$FILE" "s3://${s3_bucket}/backups/postgres/$STAMP.sql.gz"
-rm -f "$FILE"
-# No retention/pruning here -- objects accumulate under backups/postgres/
-# until whatever S3 lifecycle rule applies to that prefix (see the note
-# above this heredoc) expires them.
+${backup_script}
 BACKUP_EOF
 chmod +x /opt/a2z-core/backup-postgres.sh
 
+# --- Restore companion, same sourcing story (files/restore-postgres.sh).
+#     Not run automatically -- invoked by an operator during a restore
+#     drill or a real incident. See DEPLOYMENT.md's backup runbook for the
+#     full cutover procedure, including the Alembic-upgrade step this
+#     script does not attempt to automate. ---
+cat > /opt/a2z-core/restore-postgres.sh <<'RESTORE_EOF'
+${restore_script}
+RESTORE_EOF
+chmod +x /opt/a2z-core/restore-postgres.sh
+
 cat > /etc/cron.d/a2z-core-backup <<EOF
-0 3 * * * root /opt/a2z-core/backup-postgres.sh >> /var/log/a2z-core-backup.log 2>&1
+0 3 * * * root . /opt/a2z-core/backup.env && /opt/a2z-core/backup-postgres.sh >> /var/log/a2z-core-backup.log 2>&1
 EOF
 chmod 644 /etc/cron.d/a2z-core-backup
 

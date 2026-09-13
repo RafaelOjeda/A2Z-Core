@@ -54,6 +54,18 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
+      - name: install postgresql-client (for tests/integration/backup)
+        # Pinned via PGDG rather than the distro default: pg_dump/pg_restore
+        # refuse to run against a NEWER server than the client (the reverse
+        # is fine), so a client older than postgres:16-alpine above would
+        # silently break tests/integration/backup/test_restore_drill.py the
+        # day ubuntu-latest's default client version lags. Pinning to a
+        # known-current major removes that trap instead of relying on
+        # whatever ships in the runner image.
+        run: |
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
       - name: unit + integration
         run: pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov=app/services/invoicing --cov-report=term-missing -q
       # Gated per package rather than on one combined total: each carries its

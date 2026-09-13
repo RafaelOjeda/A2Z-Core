@@ -114,10 +114,19 @@ the code — listed here for completeness, not as new findings:
 - **AI features** (Bedrock summaries, suggested replies) — entirely absent,
   cut from scope.
 - **Round-robin / sticky routing** — not implemented (see #2 above).
-- **Nightly Postgres backup + tested restore** — not yet exercised; no AWS
-  account/EC2 host to run it against. Called "non-negotiable" in the
-  service's own design doc; still the single highest-risk open item before
-  any production launch on the single-EC2 MVP shape.
+- **Nightly Postgres backup + tested restore** — **partially resolved.**
+  `restore-postgres.sh` (`infra/modules/ec2-simple/files/`) now exists
+  alongside the nightly `backup-postgres.sh` cron, and
+  `tests/integration/backup/test_restore_drill.py` runs both real scripts
+  end to end against throwaway databases on every CI run, asserting the
+  restored data is byte-for-byte faithful (numeric precision, timezone-aware
+  timestamps, JSONB, unique constraints), not just present. What remains
+  genuinely untested: nobody has drilled a restore against the *deployed*
+  box, because no AWS account exists to deploy one — see
+  [`../../../DEPLOYMENT.md`](../../../DEPLOYMENT.md)'s backup runbook for
+  that procedure. Called "non-negotiable" in the service's own design doc;
+  the on-box drill is still the single highest-risk open item before any
+  production launch on the single-EC2 MVP shape.
 - **X-Ray + CloudWatch alarms** — moot on the current single-box MVP:
   `metrics.py` emits structured log lines, not CloudWatch custom metrics
   (there's no agent shipping logs off-box either — see

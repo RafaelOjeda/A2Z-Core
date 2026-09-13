@@ -4,8 +4,11 @@ set -e
 # A2Z Core EC2 user data script -- single-box MVP
 # (docs/architecture/single-box-mvp.md).
 #
-# Every ${...} below is a Terraform template variable (see main.tf's
-# templatefile() call) substituted once at `terraform apply` time -- this
+# Every brace-wrapped $NAME below (Terraform interpolation syntax -- not
+# spelled out literally here, since that literal sequence is itself
+# invalid HCL and breaks `terraform validate`'s templatefile() parser,
+# comment or not) is a Terraform template variable (see main.tf's
+# templatefile() call), substituted once at `terraform apply` time -- this
 # script contains no bash-native variable expansion except where noted with
 # a bare `$NAME` (no braces), which Terraform's templatefile leaves alone.
 #

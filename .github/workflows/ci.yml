@@ -55,17 +55,22 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
       - name: install postgresql-client (for tests/integration/backup)
-        # Pinned via PGDG rather than the distro default: pg_dump/pg_restore
-        # refuse to run against a NEWER server than the client (the reverse
-        # is fine), so a client older than postgres:16-alpine above would
-        # silently break tests/integration/backup/test_restore_drill.py the
-        # day ubuntu-latest's default client version lags. Pinning to a
-        # known-current major removes that trap instead of relying on
-        # whatever ships in the runner image.
+        # Pinned via PGDG to match the server's major version (16, same as
+        # postgres:16-alpine above) rather than "whatever's current" -- a
+        # NEWER client than the server is the more dangerous direction, not
+        # the safer one: pg_dump emits a preamble of `SET` statements for
+        # session GUCs tied to the *client* tool's own version (e.g. PG17's
+        # pg_dump adds `SET transaction_timeout = 0;`), and that preamble
+        # replays via psql during restore against the same (older) server --
+        # which then rejects it with "unrecognized configuration parameter".
+        # Learned the hard way: postgresql-client-17 against this exact
+        # postgres:16-alpine broke the restore drill with exactly that
+        # error. Matching majors avoids the whole class of GUC-preamble
+        # skew, not just the separate "won't dump a newer server" rule.
         run: |
           sudo apt-get install -y postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y postgresql-client-17
+          sudo apt-get install -y postgresql-client-16
       - name: unit + integration
         run: pytest -m "not load" --cov=app/core --cov=app/services/omnichannel --cov=app/services/invoicing --cov-report=term-missing -q
       # Gated per package rather than on one combined total: each carries its

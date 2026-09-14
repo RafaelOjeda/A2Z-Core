@@ -66,6 +66,20 @@ inputs = {
   ecr_repository_url = dependency.ecr.outputs.repository_url
   docker_image_tag   = "latest"
 
+  # No domain registered yet -- left unset (the module's own default is
+  # "", meaning Caddy serves plain HTTP; see user-data.sh). Unlike the ses
+  # module's `domain` placeholder (an inert, harmless-to-fake SES identity),
+  # a *fake* domain_name here actively breaks Caddy: given a hostname as
+  # its site address (rather than `:80`), Caddy tries and retry-loops a
+  # Let's Encrypt HTTP-01 challenge that can never succeed for a
+  # non-resolving name, and serves nothing while it does. Once a real
+  # domain exists, point a DNS A record at this module's `public_ip`
+  # output *first*, then set this to that hostname (should match the
+  # endpoint_url placeholder in
+  # ../ses-notifications-subscription/terragrunt.hcl, which fronts the
+  # same box).
+  domain_name = ""
+
   # REQUIRED override -- do not commit a real password. Pass via
   # `terragrunt apply -var postgres_password=...` or a gitignored
   # *.auto.tfvars file; there is deliberately no default here.

@@ -85,6 +85,41 @@ def test_full_admin_flow(client: TestClient, make_token: Callable[..., str]) -> 
     assert resp.json()["status"] == "sent"
 
 
+def test_list_my_orgs(client: TestClient, make_token: Callable[..., str]) -> None:
+    owner = make_token("auth0|orgs-owner", "owner@acme.com")
+    member = make_token("auth0|orgs-member", "member@acme.com")
+    stranger = make_token("auth0|orgs-stranger", "stranger@acme.com")
+
+    # Owner creates two orgs.
+    org_a = client.post("/v1/core/orgs", json={"name": "Org A"}, headers=_auth(owner)).json()[
+        "org_id"
+    ]
+    org_b = client.post("/v1/core/orgs", json={"name": "Org B"}, headers=_auth(owner)).json()[
+        "org_id"
+    ]
+    # Owner is added to Org A only -- never created it.
+    client.post(
+        f"/v1/core/orgs/{org_a}/members",
+        json={"user_id": "auth0|orgs-member", "role": "member"},
+        headers=_auth(owner),
+    )
+
+    resp = client.get("/v1/core/me/orgs", headers=_auth(owner))
+    assert resp.status_code == 200
+    assert {o["org_id"] for o in resp.json()} == {org_a, org_b}
+
+    # The added-to-by-someone-else org shows up without the member ever
+    # calling POST /v1/core/orgs themselves -- the bug this route fixes.
+    resp = client.get("/v1/core/me/orgs", headers=_auth(member))
+    assert resp.status_code == 200
+    assert [o["org_id"] for o in resp.json()] == [org_a]
+
+    # A user in neither org sees an empty list, not the other orgs.
+    resp = client.get("/v1/core/me/orgs", headers=_auth(stranger))
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 def test_non_member_forbidden(client: TestClient, make_token: Callable[..., str]) -> None:
     owner = make_token("auth0|owner2", "o2@acme.com")
     org_id = client.post("/v1/core/orgs", json={"name": "Org2"}, headers=_auth(owner)).json()[

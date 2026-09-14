@@ -29,16 +29,46 @@ echo "Region: ${aws_region}"
 apt-get update
 apt-get upgrade -y
 
-# --- Docker + Compose plugin ---
-apt-get install -y docker.io docker-compose-plugin awscli
+# --- Docker Engine + Compose plugin, from Docker's own apt repo -- stock
+#     Ubuntu's `docker.io`/`docker-compose-plugin` packages either lag badly
+#     or (on some Ubuntu releases) don't ship the compose plugin at all.
+#     `unzip` is for the AWS CLI v2 installer just below. ---
+apt-get install -y ca-certificates curl gnupg unzip
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  > /etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 systemctl enable --now docker
+
+# --- AWS CLI v2 -- not in apt; needed by the backup/restore scripts (`aws
+#     s3 cp`) below. This instance is arm64 (aarch64), matching the t4g
+#     instance type. ---
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install
+rm -rf /tmp/awscliv2.zip /tmp/aws
 
 mkdir -p /opt/a2z-core
 cd /opt/a2z-core
 
-# --- ECR login (the instance role grants ecr:GetAuthorizationToken + pull --
-#     see infra/modules/iam) ---
-aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin ${ecr_repository_url}
+# --- ECR auth via the credential helper, not a one-shot `docker login` --
+#     a plain login token expires in 12h and this box never refreshes it,
+#     so `docker compose pull` on a later deploy or restart would start
+#     failing silently. The credential helper re-authenticates on every
+#     pull instead, using the instance role (ecr:GetAuthorizationToken +
+#     pull, granted in infra/modules/iam). ---
+mkdir -p "$HOME/.docker"
+curl -fsSL -o /usr/local/bin/docker-credential-ecr-login \
+  https://amazon-ecr-credential-helper-releases.s3.us-east-1.amazonaws.com/latest/linux-arm64/docker-credential-ecr-login
+chmod +x /usr/local/bin/docker-credential-ecr-login
+ECR_REGISTRY=$(echo "${ecr_repository_url}" | cut -d/ -f1)
+cat > "$HOME/.docker/config.json" <<DOCKERCFG
+{"credHelpers": {"$ECR_REGISTRY": "ecr-login"}}
+DOCKERCFG
 
 # --- App environment. Only non-default values need setting -- everything
 #     else falls back to app/config.py's defaults (table names, bucket,
@@ -55,14 +85,15 @@ RUN_OMNICHANNEL_WORKER=true
 EOF
 chmod 600 /opt/a2z-core/.env
 
-# --- Caddyfile. Bare $DOMAIN_NAME/$CADDY_SITE below are real bash
-#     variables (no braces) evaluated on the box, not Terraform template
-#     vars -- see the file header. Set a real domain (and point its DNS A
-#     record at this instance's Elastic IP) to get automatic Let's Encrypt
-#     TLS; left blank, Caddy serves plain HTTP on :80 so the box is at
-#     least reachable, and TLS is a manual follow-up before accepting real
+# --- Caddyfile. $DOMAIN_NAME comes from the domain_name Terraform variable
+#     (brace-wrapped ${domain_name} below, per the file header); $CADDY_SITE
+#     is real bash, computed from it. Set domain_name (and point its DNS A
+#     record at this instance's Elastic IP *first*, or the Let's Encrypt
+#     HTTP-01 challenge will fail) to get automatic TLS; left blank (the
+#     default), Caddy serves plain HTTP on :80 so the box is at least
+#     reachable, and TLS is a manual follow-up before accepting real
 #     webhook traffic. ---
-DOMAIN_NAME=""
+DOMAIN_NAME="${domain_name}"
 if [ -n "$DOMAIN_NAME" ]; then
   CADDY_SITE="$DOMAIN_NAME"
 else
@@ -70,7 +101,14 @@ else
 fi
 cat > /opt/a2z-core/Caddyfile <<EOF
 $CADDY_SITE {
-    reverse_proxy app:8000
+    # flush_interval -1: disables response buffering. Needed for the
+    # Omni-Channel SSE stream (GET /v1/omnichannel/orgs/{org_id}/stream,
+    # app/routers/omnichannel.py) to actually reach clients as it's
+    # written rather than sitting in Caddy's buffer -- harmless for every
+    # other (ordinary, buffered-response) route.
+    reverse_proxy app:8000 {
+        flush_interval -1
+    }
 }
 EOF
 

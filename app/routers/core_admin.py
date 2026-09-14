@@ -50,6 +50,20 @@ async def create_org(body: CreateOrgRequest, user: CurrentUser) -> Org:
     return await membership.create_org(body.name, user["sub"])
 
 
+@router.get("/me/orgs")
+async def list_my_orgs(user: CurrentUser) -> list[Org]:
+    """List every org the caller belongs to.
+
+    Thin wrapper over the existing, already-tested
+    ``membership.list_user_orgs`` — that helper predates this route and was
+    previously only used internally/in tests. Added for browser/BFF clients
+    that need to discover a signed-in user's orgs; there was previously no
+    HTTP path to it, so a returning member added to an org by someone else
+    had no way to find its org_id (docs/architecture/auth-and-authorization.md).
+    """
+    return await membership.list_user_orgs(user["sub"])
+
+
 @router.get("/orgs/{org_id}/members")
 async def list_members(org_id: str, user: CurrentUser) -> list[Membership]:
     await require_member(org_id, user)

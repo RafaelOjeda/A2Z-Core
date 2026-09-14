@@ -81,18 +81,32 @@ variable "ses_notifications_topic_arn" {
   default = ""
 }
 
+variable "domain_name" {
+  type        = string
+  default     = ""
+  description = "Public hostname for this instance (e.g. api.a2z.example.com). Left blank, Caddy serves plain HTTP on :80 and the box is reachable but unencrypted -- see user-data.sh's Caddyfile comment. Point a DNS A record at this module's Elastic IP output *before* setting this, or Let's Encrypt's HTTP-01 challenge will fail."
+}
+
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"] # Canonical
 
+  # arm64, matching the t4g (Graviton) instance family above -- an amd64
+  # image (what this filter selected before) will not launch on a t4g.*
+  # instance type at all.
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+    values = ["ubuntu/images/hvm-ssd/ubuntu-noble-24.04-arm64-server-*"]
   }
 
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
   }
 }
 
@@ -120,6 +134,7 @@ resource "aws_instance" "app" {
     cognito_user_pool_id        = var.cognito_user_pool_id
     cognito_app_client_id       = var.cognito_app_client_id
     ses_notifications_topic_arn = var.ses_notifications_topic_arn
+    domain_name                 = var.domain_name
     # Read verbatim, not Terraform-templated: these two scripts take their
     # own config from environment variables (backup.env, below) precisely
     # so tests/integration/backup/test_restore_drill.py can run them

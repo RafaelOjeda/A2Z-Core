@@ -24,7 +24,7 @@ infra/
 │   ├── ecr/                           # the one image repo (app/Dockerfile)
 │   ├── vpc/                           # one public subnet, one AZ, free DDB/S3 gateway endpoints, one SG
 │   ├── iam/                           # one EC2 instance role -- Dynamo/S3/SES/EventBridge/SQS/SecretsManager/ECR-pull
-│   ├── cognito/                       # user pool + SPA client only (no Lambda -- see app/dependencies.py)
+│   ├── cognito/                       # user pool + SPA client + hosted-UI domain (no Lambda -- see app/dependencies.py)
 │   ├── ec2-simple/                    # the instance: app + postgres + caddy via docker-compose (user-data.sh)
 │   ├── ses-notifications-subscription/ # SNS -> HTTPS subscription to the box's webhook route
 │   └── sqs-omnichannel/               # Omni-Channel's inbound/outbound queues + DLQs
@@ -57,17 +57,24 @@ docker build -t <ecr_repository_url>:latest .
 docker push <ecr_repository_url>:latest
 ```
 
-**Two things you must set before `ec2` applies cleanly (deliberately no
-defaults, to avoid a real value ever being committed):**
+**Things you must set before a clean apply (deliberately no defaults, to
+avoid a real value ever being committed):**
 
 - `postgres_password` in `live/prod/ec2/terragrunt.hcl` -- override via
   `-var` or a gitignored `*.auto.tfvars`.
+- `hosted_ui_domain_prefix` in `live/prod/cognito/terragrunt.hcl` -- the
+  placeholder there **will fail to apply**: Cognito domain prefixes are
+  globally unique across every AWS account, not just this one. Pick a real,
+  specific value first.
 - A real domain pointed at the `ec2` module's Elastic IP, then
+  `domain_name` in `live/prod/ec2/terragrunt.hcl` (currently `""`) and
   `endpoint_url` in `live/prod/ses-notifications-subscription/terragrunt.hcl`
-  and the (currently blank) `DOMAIN_NAME` in
-  `modules/ec2-simple/user-data.sh` -- see that file's Caddyfile comment.
-  Until DNS is live, Caddy serves plain HTTP and the SNS subscription sits
-  "pending confirmation"; both are inert, not broken, in that state.
+  (currently a `CHANGE-ME` placeholder) -- see `ec2-simple/user-data.sh`'s
+  Caddyfile comment. Until DNS is live, leave `domain_name` blank: Caddy
+  then serves plain HTTP and the SNS subscription sits "pending
+  confirmation" -- both inert, not broken. A *fake* `domain_name`, unlike
+  the other placeholders here, actively breaks Caddy (see that variable's
+  description), so don't fill it in until DNS is real.
 
 ## Cost posture
 

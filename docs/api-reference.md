@@ -45,6 +45,7 @@ sending email directly against Core.
 | Route | Method | Auth | Notes |
 |---|---|---|---|
 | `/v1/core/orgs` | POST | any authenticated user | `{"name": str}` → creates an org with the caller as OWNER |
+| `/v1/core/me/orgs` | GET | any authenticated user | `list[Org]` — every org the caller belongs to, whether created or added-to. There is no equivalent "who am I" route beyond the JWT's own claims |
 | `/v1/core/orgs/{org_id}/members` | GET | member (any role) | Lists members, owner-first |
 | `/v1/core/orgs/{org_id}/members` | POST | OWNER/ADMIN | `{"user_id": str, "role": Role}` |
 | `/v1/core/orgs/{org_id}/settings` | GET | member (any role) | Returns `OrgSettings` |

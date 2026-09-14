@@ -30,8 +30,11 @@ inputs = {
   topic_arn = dependency.ses.outputs.notifications_topic_arn
 
   # REQUIRED override once DNS points a real domain at the ec2 module's
-  # Elastic IP and Caddy has a cert for it (ec2-simple/user-data.sh). Until
-  # then this subscription sits "pending confirmation" in the SNS console --
-  # inert, not broken.
+  # Elastic IP and Caddy has a cert for it (ec2-simple/user-data.sh). Should
+  # match whatever real hostname gets set as ../ec2/terragrunt.hcl's
+  # `domain_name` -- same box, same domain. Until then this subscription
+  # sits "pending confirmation" in the SNS console -- inert, not broken
+  # (unlike a fake `domain_name` on the ec2 side, which actively breaks
+  # Caddy -- see that file's comment).
   endpoint_url = "https://CHANGE-ME.example.com/webhooks/ses-notifications"
 }

@@ -13,4 +13,10 @@ terraform {
 
 inputs = {
   name_prefix = "a2z-core"
+
+  # REQUIRED override -- Cognito domain prefixes are globally unique across
+  # every AWS account, not just this one, so this placeholder WILL collide.
+  # Pick a real, specific value before applying (see the module's own
+  # variable description).
+  hosted_ui_domain_prefix = "a2z-core-CHANGE-ME"
 }

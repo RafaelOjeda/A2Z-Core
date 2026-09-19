@@ -13,7 +13,8 @@ module or service you're actually touching.
 
 **Looking for something specific?** [`INDEX.md`](INDEX.md) is the flat,
 scannable table of every doc plus a "find it by task" lookup — this page is
-the guided tour, that one is the map.
+the guided tour, that one is the map. For every public function in one
+scroll, see [`module-map.md`](module-map.md).
 
 ## Architecture
 
@@ -68,6 +69,7 @@ the way `docs/services/omnichannel/known-issues.md` warns against.
 
 | Doc | Covers |
 |---|---|
+| [`module-map.md`](module-map.md) | Every public function across Core, both services, and the routers, plus the layer diagram |
 | [`api-reference.md`](api-reference.md) | Full HTTP surface (health, core admin, Omni-Channel) |
 | [`configuration.md`](configuration.md) | Every environment variable and config registry |
 | [`testing.md`](testing.md) | Test layout, the moto harness, coverage gates, cross-org isolation testing |
@@ -102,6 +104,7 @@ the way `docs/services/omnichannel/known-issues.md` warns against.
 ```
 docs/
 ├── README.md                        # this file
+├── module-map.md                    # every public function, one page, plus the layer diagram
 ├── architecture/                    # cross-cutting system design + diagrams
 ├── core/                            # one doc per app/core/*.py module
 ├── services/omnichannel/            # one doc per concern of the Omni-Channel service

@@ -18,6 +18,7 @@ description of current code.
 | I want to… | Go to |
 |---|---|
 | Understand the whole system fast | [architecture/overview.md](architecture/overview.md) → [request-lifecycle.md](architecture/request-lifecycle.md) |
+| See every public function in one page | [module-map.md](module-map.md) |
 | Know how a request is authenticated/authorized | [architecture/auth-and-authorization.md](architecture/auth-and-authorization.md), [zero-trust.md](zero-trust.md) |
 | Call or add an HTTP endpoint | [api-reference.md](api-reference.md) (core) · [services/omnichannel/api-reference.md](services/omnichannel/api-reference.md) (omni) |
 | Use a Core module (`app/core/*`) | [core/README.md](core/README.md) → the module's page |
@@ -90,6 +91,7 @@ description of current code.
 
 | Doc | Covers | Authority |
 |---|---|---|
+| [module-map.md](module-map.md) | Every public function across Core, both services, and the routers, plus the layer diagram | ref |
 | [api-reference.md](api-reference.md) | Full HTTP surface: health, core admin, versioning, error shape | ref |
 | [configuration.md](configuration.md) | Every environment variable + config registry | ref |
 | [testing.md](testing.md) | Test layout, the moto harness, coverage gates, cross-org isolation | ref |
